@@ -105,13 +105,11 @@ interface PublicKeyData {
 
         </header>
 
-
-        <main class="messages" #messageBox>
+        <main class="messages">
 
           <div class="date-pill">
             Today
           </div>
-
 
           @for (item of messages(); track item.id || $index) {
 
@@ -152,7 +150,6 @@ interface PublicKeyData {
           }
 
         </main>
-
 
         <form
           class="composer"
@@ -271,13 +268,12 @@ export class AppComponent implements OnDestroy {
 
 
   // ==================================================
-  // PENDING HISTORY
-  //
-  // History can arrive before the peer key.
-  // Keep it temporarily until encryption is ready.
+  // HISTORY
   // ==================================================
 
   private pendingHistory?: EncryptedMessage[];
+
+  private lastHistory?: EncryptedMessage[];
 
 
   // ==================================================
@@ -343,7 +339,7 @@ export class AppComponent implements OnDestroy {
 
 
     // ==================================================
-    // CREATE / RESTORE E2E KEY PAIR
+    // PREPARE E2E KEYS
     // ==================================================
 
     try {
@@ -384,6 +380,7 @@ export class AppComponent implements OnDestroy {
 
         this.online.set(true);
 
+        // Join first.
         this.socket?.emit(
           'join',
           {
@@ -415,6 +412,27 @@ export class AppComponent implements OnDestroy {
 
         this.pendingHistory = undefined;
 
+        this.lastHistory = undefined;
+
+      }
+    );
+
+
+    // ==================================================
+    // SERVER REQUESTED OUR PUBLIC KEY
+    // ==================================================
+
+    this.socket.on(
+      'requestPublicKey',
+      async () => {
+
+        await this.sendPublicKey();
+
+        // Also explicitly ask for the peer.
+        this.socket?.emit(
+          'requestPeerKey'
+        );
+
       }
     );
 
@@ -431,13 +449,14 @@ export class AppComponent implements OnDestroy {
 
           if (
             !data ||
-            !data.key
+            !data.key ||
+            !data.name
           ) {
             return;
           }
 
 
-          // Do not use our own key
+          // Ignore our own key.
           if (
             data.name.toLowerCase() ===
             this.name.toLowerCase()
@@ -446,7 +465,7 @@ export class AppComponent implements OnDestroy {
           }
 
 
-          this.peerPublicKey =
+          const importedPeerKey =
             await crypto.subtle.importKey(
               'jwk',
               data.key,
@@ -459,13 +478,18 @@ export class AppComponent implements OnDestroy {
             );
 
 
+          this.peerPublicKey =
+            importedPeerKey;
+
+
           await this.deriveEncryptionKey();
+
 
           this.encryptionReady.set(true);
 
 
           // ==================================================
-          // PROCESS HISTORY THAT ARRIVED BEFORE KEY
+          // PROCESS HISTORY
           // ==================================================
 
           if (this.pendingHistory) {
@@ -480,11 +504,18 @@ export class AppComponent implements OnDestroy {
               history
             );
 
+          } else if (this.lastHistory) {
+
+            // Re-try history if a newer peer key
+            // arrived after an earlier decryption attempt.
+            await this.processHistory(
+              this.lastHistory
+            );
+
           }
 
 
-          // Ask server to send the peer key
-          // back if this client connected later.
+          // Ask server again for the latest peer key.
           this.socket?.emit(
             'requestPeerKey'
           );
@@ -506,20 +537,6 @@ export class AppComponent implements OnDestroy {
 
 
     // ==================================================
-    // PEER REQUESTED OUR PUBLIC KEY
-    // ==================================================
-
-    this.socket.on(
-      'requestPublicKey',
-      () => {
-
-        this.sendPublicKey();
-
-      }
-    );
-
-
-    // ==================================================
     // DATABASE CHAT HISTORY
     // ==================================================
 
@@ -527,14 +544,11 @@ export class AppComponent implements OnDestroy {
       'history',
       async (history: EncryptedMessage[]) => {
 
-        // ==================================================
-        // KEY NOT READY YET
-        //
-        // Do NOT lose history.
-        // Store it temporarily and decrypt it once
-        // the peer public key is available.
-        // ==================================================
+        this.lastHistory =
+          history;
 
+
+        // Wait until peer key exists.
         if (!this.encryptionKey) {
 
           this.pendingHistory =
@@ -563,10 +577,14 @@ export class AppComponent implements OnDestroy {
 
         try {
 
-          // If key is not ready, ignore the message.
-          // Normally this cannot happen because send
-          // button remains disabled until encryptionReady.
           if (!this.encryptionKey) {
+
+            // Keep it temporarily instead of losing it.
+            this.lastHistory = [
+              ...(this.lastHistory || []),
+              message
+            ];
+
             return;
           }
 
@@ -716,6 +734,8 @@ export class AppComponent implements OnDestroy {
         this.peerPublicKey = undefined;
 
         this.pendingHistory = undefined;
+
+        this.lastHistory = undefined;
 
 
         this.loginError.set(
@@ -974,7 +994,9 @@ export class AppComponent implements OnDestroy {
       !this.privateKey ||
       !this.peerPublicKey
     ) {
-      return;
+      throw new Error(
+        'E2E keys are not available.'
+      );
     }
 
 
@@ -1220,7 +1242,7 @@ export class AppComponent implements OnDestroy {
 
 
   // ==================================================
-  // TYPING HANDLER
+  // TYPING
   // ==================================================
 
   handleTyping() {
@@ -1259,7 +1281,7 @@ export class AppComponent implements OnDestroy {
 
 
   // ==================================================
-  // WHATSAPP STYLE TIME
+  // TIME
   // ==================================================
 
   formatTime(
