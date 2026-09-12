@@ -4,12 +4,26 @@ import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { io, Socket } from 'socket.io-client';
 
+interface EncryptedMessage {
+  id?: string;
+  name: string;
+  ciphertext: string;
+  iv: string;
+  time: string;
+  mine?: boolean;
+}
+
 interface ChatMessage {
   id?: string;
   name: string;
   text: string;
   time: string;
   mine?: boolean;
+}
+
+interface PublicKeyData {
+  name: string;
+  key: JsonWebKey;
 }
 
 @Component({
@@ -156,7 +170,7 @@ interface ChatMessage {
 
           <button
             type="submit"
-            [disabled]="!draft.trim() || !online()"
+            [disabled]="!draft.trim() || !online() || !encryptionReady()"
             aria-label="Send"
           >
             ↑
@@ -200,6 +214,21 @@ export class AppComponent implements OnDestroy {
   ];
 
 
+  // ==================================================
+  // E2E STORAGE
+  // ==================================================
+
+  private readonly privateKeyStorage =
+    'couple-chat-e2e-private-key';
+
+  private readonly publicKeyStorage =
+    'couple-chat-e2e-public-key';
+
+
+  // ==================================================
+  // STATE
+  // ==================================================
+
   joined = signal(false);
 
   online = signal(false);
@@ -207,6 +236,8 @@ export class AppComponent implements OnDestroy {
   typing = signal('');
 
   loginError = signal('');
+
+  encryptionReady = signal(false);
 
   messages = signal<ChatMessage[]>([]);
 
@@ -216,20 +247,49 @@ export class AppComponent implements OnDestroy {
 
   draft = '';
 
+
+  // ==================================================
+  // SOCKET / TIMERS
+  // ==================================================
+
   private socket?: Socket;
 
   private typingTimer?: ReturnType<typeof setTimeout>;
 
 
   // ==================================================
+  // E2E KEYS
+  // ==================================================
+
+  private privateKey?: CryptoKey;
+
+  private publicKey?: CryptoKey;
+
+  private peerPublicKey?: CryptoKey;
+
+  private encryptionKey?: CryptoKey;
+
+
+  // ==================================================
+  // PENDING HISTORY
+  //
+  // History can arrive before the peer key.
+  // Keep it temporarily until encryption is ready.
+  // ==================================================
+
+  private pendingHistory?: EncryptedMessage[];
+
+
+  // ==================================================
   // JOIN CHAT
   // ==================================================
 
-  join() {
+  async join() {
 
-    this.name = this.name
-      .trim()
-      .slice(0, 24);
+    this.name =
+      this.name
+        .trim()
+        .slice(0, 24);
 
     const normalizedName =
       this.name.toLowerCase();
@@ -277,11 +337,39 @@ export class AppComponent implements OnDestroy {
     }
 
 
-    // Clear previous error
     this.loginError.set('');
 
-
     this.joined.set(true);
+
+
+    // ==================================================
+    // CREATE / RESTORE E2E KEY PAIR
+    // ==================================================
+
+    try {
+
+      await this.prepareEncryptionKeys();
+
+    } catch (error) {
+
+      console.error(
+        'E2E key setup failed:',
+        error
+      );
+
+      this.joined.set(false);
+
+      this.loginError.set(
+        'Secure encryption could not be initialized.'
+      );
+
+      return;
+    }
+
+
+    // ==================================================
+    // SOCKET CONNECTION
+    // ==================================================
 
     this.socket = io();
 
@@ -290,28 +378,145 @@ export class AppComponent implements OnDestroy {
     // CONNECT
     // ==================================================
 
-    this.socket.on('connect', () => {
+    this.socket.on(
+      'connect',
+      () => {
 
-      this.online.set(true);
+        this.online.set(true);
 
-      this.socket?.emit('join', {
-        roomId: this.roomId,
-        name: this.name,
-        passcode: this.passcode
-      });
+        this.socket?.emit(
+          'join',
+          {
+            roomId: this.roomId,
+            name: this.name,
+            passcode: this.passcode
+          }
+        );
 
-    });
+      }
+    );
 
 
     // ==================================================
     // DISCONNECT
     // ==================================================
 
-    this.socket.on('disconnect', () => {
+    this.socket.on(
+      'disconnect',
+      () => {
 
-      this.online.set(false);
+        this.online.set(false);
 
-    });
+        this.encryptionReady.set(false);
+
+        this.encryptionKey = undefined;
+
+        this.peerPublicKey = undefined;
+
+        this.pendingHistory = undefined;
+
+      }
+    );
+
+
+    // ==================================================
+    // PEER PUBLIC KEY
+    // ==================================================
+
+    this.socket.on(
+      'peerPublicKey',
+      async (data: PublicKeyData) => {
+
+        try {
+
+          if (
+            !data ||
+            !data.key
+          ) {
+            return;
+          }
+
+
+          // Do not use our own key
+          if (
+            data.name.toLowerCase() ===
+            this.name.toLowerCase()
+          ) {
+            return;
+          }
+
+
+          this.peerPublicKey =
+            await crypto.subtle.importKey(
+              'jwk',
+              data.key,
+              {
+                name: 'ECDH',
+                namedCurve: 'P-256'
+              },
+              true,
+              []
+            );
+
+
+          await this.deriveEncryptionKey();
+
+          this.encryptionReady.set(true);
+
+
+          // ==================================================
+          // PROCESS HISTORY THAT ARRIVED BEFORE KEY
+          // ==================================================
+
+          if (this.pendingHistory) {
+
+            const history =
+              this.pendingHistory;
+
+            this.pendingHistory =
+              undefined;
+
+            await this.processHistory(
+              history
+            );
+
+          }
+
+
+          // Ask server to send the peer key
+          // back if this client connected later.
+          this.socket?.emit(
+            'requestPeerKey'
+          );
+
+
+        } catch (error) {
+
+          console.error(
+            'Peer key error:',
+            error
+          );
+
+          this.encryptionReady.set(false);
+
+        }
+
+      }
+    );
+
+
+    // ==================================================
+    // PEER REQUESTED OUR PUBLIC KEY
+    // ==================================================
+
+    this.socket.on(
+      'requestPublicKey',
+      () => {
+
+        this.sendPublicKey();
+
+      }
+    );
 
 
     // ==================================================
@@ -320,42 +525,91 @@ export class AppComponent implements OnDestroy {
 
     this.socket.on(
       'history',
-      (history: ChatMessage[]) => {
+      async (history: EncryptedMessage[]) => {
 
-        this.messages.set(
-          history.map(message => ({
-            ...message,
-            mine:
-              message.name.toLowerCase() ===
-              this.name.toLowerCase()
-          }))
+        // ==================================================
+        // KEY NOT READY YET
+        //
+        // Do NOT lose history.
+        // Store it temporarily and decrypt it once
+        // the peer public key is available.
+        // ==================================================
+
+        if (!this.encryptionKey) {
+
+          this.pendingHistory =
+            history;
+
+          return;
+
+        }
+
+
+        await this.processHistory(
+          history
         );
-
-        this.scrollSoon();
 
       }
     );
 
 
     // ==================================================
-    // NEW MESSAGE
+    // NEW ENCRYPTED MESSAGE
     // ==================================================
 
     this.socket.on(
       'message',
-      (message: ChatMessage) => {
+      async (message: EncryptedMessage) => {
 
-        this.messages.update(list => [
-          ...list,
-          {
-            ...message,
-            mine:
-              message.name.toLowerCase() ===
-              this.name.toLowerCase()
+        try {
+
+          // If key is not ready, ignore the message.
+          // Normally this cannot happen because send
+          // button remains disabled until encryptionReady.
+          if (!this.encryptionKey) {
+            return;
           }
-        ]);
 
-        this.scrollSoon();
+
+          const text =
+            await this.decryptMessage(
+              message.ciphertext,
+              message.iv
+            );
+
+
+          this.messages.update(
+            list => [
+              ...list,
+
+              {
+                id: message.id,
+
+                name: message.name,
+
+                text,
+
+                time: message.time,
+
+                mine:
+                  message.name.toLowerCase() ===
+                  this.name.toLowerCase()
+              }
+            ]
+          );
+
+
+          this.scrollSoon();
+
+
+        } catch (error) {
+
+          console.error(
+            'Incoming message decryption failed:',
+            error
+          );
+
+        }
 
       }
     );
@@ -369,14 +623,17 @@ export class AppComponent implements OnDestroy {
       'system',
       (text: string) => {
 
-        this.messages.update(list => [
-          ...list,
-          {
-            name: '__system',
-            text,
-            time: ''
-          }
-        ]);
+        this.messages.update(
+          list => [
+            ...list,
+
+            {
+              name: '__system',
+              text,
+              time: ''
+            }
+          ]
+        );
 
         this.scrollSoon();
 
@@ -399,13 +656,16 @@ export class AppComponent implements OnDestroy {
           return;
         }
 
+
         this.typing.set(
           `${who} is typing…`
         );
 
+
         clearTimeout(
           this.typingTimer
         );
+
 
         this.typingTimer =
           setTimeout(
@@ -444,15 +704,26 @@ export class AppComponent implements OnDestroy {
           error
         );
 
+
         this.joined.set(false);
 
         this.online.set(false);
 
+        this.encryptionReady.set(false);
+
+        this.encryptionKey = undefined;
+
+        this.peerPublicKey = undefined;
+
+        this.pendingHistory = undefined;
+
+
         this.loginError.set(
-          error || 'Unable to enter the chat.'
+          error ||
+          'Unable to enter the chat.'
         );
 
-        // Disconnect rejected socket
+
         this.socket?.disconnect();
 
       }
@@ -462,32 +733,488 @@ export class AppComponent implements OnDestroy {
 
 
   // ==================================================
-  // SEND MESSAGE
+  // PROCESS / DECRYPT HISTORY
   // ==================================================
 
-  send() {
+  private async processHistory(
+    history: EncryptedMessage[]
+  ) {
 
-    const text =
-      this.draft.trim();
+    if (!this.encryptionKey) {
+      return;
+    }
+
+
+    const decrypted: ChatMessage[] = [];
+
+
+    for (
+      const message of history
+    ) {
+
+      try {
+
+        const text =
+          await this.decryptMessage(
+            message.ciphertext,
+            message.iv
+          );
+
+
+        decrypted.push({
+          id: message.id,
+
+          name: message.name,
+
+          text,
+
+          time: message.time,
+
+          mine:
+            message.name.toLowerCase() ===
+            this.name.toLowerCase()
+        });
+
+
+      } catch (error) {
+
+        console.error(
+          'Message decryption failed:',
+          error
+        );
+
+
+        decrypted.push({
+          id: message.id,
+
+          name: message.name,
+
+          text: '[Unable to decrypt this message]',
+
+          time: message.time,
+
+          mine:
+            message.name.toLowerCase() ===
+            this.name.toLowerCase()
+        });
+
+      }
+
+    }
+
+
+    this.messages.set(
+      decrypted
+    );
+
+    this.scrollSoon();
+
+  }
+
+
+  // ==================================================
+  // E2E KEY PREPARATION
+  // ==================================================
+
+  private async prepareEncryptionKeys() {
+
+    const savedPrivateKey =
+      localStorage.getItem(
+        this.privateKeyStorage
+      );
+
+    const savedPublicKey =
+      localStorage.getItem(
+        this.publicKeyStorage
+      );
+
+
+    // --------------------------------------------------
+    // Restore existing key pair
+    // --------------------------------------------------
 
     if (
-      !text ||
+      savedPrivateKey &&
+      savedPublicKey
+    ) {
+
+      const privateJwk =
+        JSON.parse(
+          savedPrivateKey
+        );
+
+      const publicJwk =
+        JSON.parse(
+          savedPublicKey
+        );
+
+
+      this.privateKey =
+        await crypto.subtle.importKey(
+          'jwk',
+          privateJwk,
+          {
+            name: 'ECDH',
+            namedCurve: 'P-256'
+          },
+          true,
+          ['deriveKey']
+        );
+
+
+      this.publicKey =
+        await crypto.subtle.importKey(
+          'jwk',
+          publicJwk,
+          {
+            name: 'ECDH',
+            namedCurve: 'P-256'
+          },
+          true,
+          []
+        );
+
+
+      return;
+    }
+
+
+    // --------------------------------------------------
+    // Generate new key pair
+    // --------------------------------------------------
+
+    const keyPair =
+      await crypto.subtle.generateKey(
+        {
+          name: 'ECDH',
+          namedCurve: 'P-256'
+        },
+        true,
+        [
+          'deriveKey',
+          'deriveBits'
+        ]
+      );
+
+
+    this.privateKey =
+      keyPair.privateKey;
+
+    this.publicKey =
+      keyPair.publicKey;
+
+
+    const privateJwk =
+      await crypto.subtle.exportKey(
+        'jwk',
+        keyPair.privateKey
+      );
+
+
+    const publicJwk =
+      await crypto.subtle.exportKey(
+        'jwk',
+        keyPair.publicKey
+      );
+
+
+    localStorage.setItem(
+      this.privateKeyStorage,
+      JSON.stringify(privateJwk)
+    );
+
+
+    localStorage.setItem(
+      this.publicKeyStorage,
+      JSON.stringify(publicJwk)
+    );
+
+  }
+
+
+  // ==================================================
+  // SEND PUBLIC KEY
+  // ==================================================
+
+  private async sendPublicKey() {
+
+    if (
       !this.socket ||
-      !this.online()
+      !this.publicKey
     ) {
       return;
     }
 
-    this.socket.emit(
-      'message',
-      text
-    );
+
+    const jwk =
+      await crypto.subtle.exportKey(
+        'jwk',
+        this.publicKey
+      );
+
 
     this.socket.emit(
-      'stopTyping'
+      'publicKey',
+      {
+        name: this.name,
+        key: jwk
+      }
     );
 
-    this.draft = '';
+  }
+
+
+  // ==================================================
+  // DERIVE SHARED ENCRYPTION KEY
+  // ==================================================
+
+  private async deriveEncryptionKey() {
+
+    if (
+      !this.privateKey ||
+      !this.peerPublicKey
+    ) {
+      return;
+    }
+
+
+    this.encryptionKey =
+      await crypto.subtle.deriveKey(
+        {
+          name: 'ECDH',
+          public: this.peerPublicKey
+        },
+        this.privateKey,
+        {
+          name: 'AES-GCM',
+          length: 256
+        },
+        false,
+        [
+          'encrypt',
+          'decrypt'
+        ]
+      );
+
+  }
+
+
+  // ==================================================
+  // ENCRYPT MESSAGE
+  // ==================================================
+
+  private async encryptMessage(
+    text: string
+  ): Promise<{
+    ciphertext: string;
+    iv: string;
+  }> {
+
+    if (
+      !this.encryptionKey
+    ) {
+      throw new Error(
+        'Encryption key is not ready.'
+      );
+    }
+
+
+    const iv =
+      crypto.getRandomValues(
+        new Uint8Array(12)
+      );
+
+
+    const encoded =
+      new TextEncoder().encode(
+        text
+      );
+
+
+    const encrypted =
+      await crypto.subtle.encrypt(
+        {
+          name: 'AES-GCM',
+          iv
+        },
+        this.encryptionKey,
+        encoded
+      );
+
+
+    return {
+      ciphertext:
+        this.arrayBufferToBase64(
+          encrypted
+        ),
+
+      iv:
+        this.arrayBufferToBase64(
+          iv
+        )
+    };
+
+  }
+
+
+  // ==================================================
+  // DECRYPT MESSAGE
+  // ==================================================
+
+  private async decryptMessage(
+    ciphertext: string,
+    iv: string
+  ): Promise<string> {
+
+    if (
+      !this.encryptionKey
+    ) {
+      throw new Error(
+        'Encryption key is not ready.'
+      );
+    }
+
+
+    const encrypted =
+      this.base64ToUint8Array(
+        ciphertext
+      );
+
+
+    const initializationVector =
+      this.base64ToUint8Array(
+        iv
+      );
+
+
+    const decrypted =
+      await crypto.subtle.decrypt(
+        {
+          name: 'AES-GCM',
+          iv: initializationVector
+        },
+        this.encryptionKey,
+        encrypted
+      );
+
+
+    return new TextDecoder().decode(
+      decrypted
+    );
+
+  }
+
+
+  // ==================================================
+  // BASE64 HELPERS
+  // ==================================================
+
+  private arrayBufferToBase64(
+    buffer: ArrayBuffer | Uint8Array
+  ): string {
+
+    const bytes =
+      buffer instanceof Uint8Array
+        ? buffer
+        : new Uint8Array(buffer);
+
+
+    let binary = '';
+
+
+    for (
+      const byte of bytes
+    ) {
+      binary += String.fromCharCode(
+        byte
+      );
+    }
+
+
+    return btoa(binary);
+
+  }
+
+
+  private base64ToUint8Array(
+    value: string
+  ): Uint8Array {
+
+    const binary =
+      atob(value);
+
+
+    const bytes =
+      new Uint8Array(
+        binary.length
+      );
+
+
+    for (
+      let i = 0;
+      i < binary.length;
+      i++
+    ) {
+      bytes[i] =
+        binary.charCodeAt(i);
+    }
+
+
+    return bytes;
+
+  }
+
+
+  // ==================================================
+  // SEND MESSAGE
+  // ==================================================
+
+  async send() {
+
+    const text =
+      this.draft.trim();
+
+
+    if (
+      !text ||
+      !this.socket ||
+      !this.online() ||
+      !this.encryptionReady()
+    ) {
+      return;
+    }
+
+
+    try {
+
+      const encrypted =
+        await this.encryptMessage(
+          text
+        );
+
+
+      this.socket.emit(
+        'message',
+        encrypted
+      );
+
+
+      this.socket.emit(
+        'stopTyping'
+      );
+
+
+      this.draft = '';
+
+
+    } catch (error) {
+
+      console.error(
+        'Encryption failed:',
+        error
+      );
+
+    }
 
   }
 
@@ -505,20 +1232,25 @@ export class AppComponent implements OnDestroy {
       return;
     }
 
+
     this.socket.emit(
       'typing'
     );
+
 
     clearTimeout(
       this.typingTimer
     );
 
+
     this.typingTimer =
       setTimeout(
         () => {
+
           this.socket?.emit(
             'stopTyping'
           );
+
         },
         900
       );
@@ -538,8 +1270,10 @@ export class AppComponent implements OnDestroy {
       return '';
     }
 
+
     const date =
       new Date(time);
+
 
     if (
       isNaN(
@@ -548,6 +1282,7 @@ export class AppComponent implements OnDestroy {
     ) {
       return time;
     }
+
 
     return date.toLocaleTimeString(
       'en-IN',
@@ -567,21 +1302,24 @@ export class AppComponent implements OnDestroy {
 
   private scrollSoon() {
 
-    setTimeout(() => {
+    setTimeout(
+      () => {
 
-      const el =
-        document.querySelector(
-          '.messages'
-        ) as HTMLElement | null;
+        const el =
+          document.querySelector(
+            '.messages'
+          ) as HTMLElement | null;
 
-      if (el) {
 
-        el.scrollTop =
-          el.scrollHeight;
+        if (el) {
+
+          el.scrollTop =
+            el.scrollHeight;
+
+        }
 
       }
-
-    });
+    );
 
   }
 
