@@ -1,0 +1,11 @@
+node_modules/
+client/node_modules/
+
+.angular/
+client/.angular/
+
+dist/
+client/dist/
+
+.env
+.env.*

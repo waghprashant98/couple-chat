@@ -20,8 +20,7 @@ const clientDist = path.join(
   __dirname,
   "client",
   "dist",
-  "couple-chat",
-  "browser"
+  "couple-chat"
 );
 
 // =========================
