@@ -89,14 +89,22 @@ const pool =
 // ==================================================
 // E2E PUBLIC KEYS
 //
-// Keys are kept only in server memory.
-// They are NOT stored in Supabase.
+// Public keys are kept only in server memory.
+// Private keys NEVER reach the server.
 //
-// The server only relays public keys.
-// Private keys never reach the server.
+// publicKeys:
+//   username -> public JWK
+//
+// publicKeySockets:
+//   username -> socket.id
+//
+// The second map prevents stale public keys
+// from being used after a browser disconnects.
 // ==================================================
 
 const publicKeys = new Map();
+
+const publicKeySockets = new Map();
 
 
 // ==================================================
@@ -235,7 +243,10 @@ function isValidPasscode(value) {
 
 function isValidEncryptedMessage(data) {
 
-  if (!data || typeof data !== "object") {
+  if (
+    !data ||
+    typeof data !== "object"
+  ) {
     return false;
   }
 
@@ -264,7 +275,7 @@ function isValidEncryptedMessage(data) {
   }
 
 
-  // Keep payload safely below
+  // Keep encrypted payload safely below
   // Socket.IO maxHttpBufferSize.
   if (
     data.ciphertext.length >
@@ -288,6 +299,60 @@ function isValidEncryptedMessage(data) {
 
 
 // ==================================================
+// CHECK CURRENT PEER SOCKET
+// ==================================================
+
+function getValidPeerSocket(
+  peerName
+) {
+
+  const normalizedName =
+    String(peerName || "")
+      .toLowerCase();
+
+
+  const socketId =
+    publicKeySockets.get(
+      normalizedName
+    );
+
+
+  if (!socketId) {
+    return null;
+  }
+
+
+  const peerSocket =
+    io.sockets.sockets.get(
+      socketId
+    );
+
+
+  if (
+    !peerSocket ||
+    !peerSocket.data.authenticated ||
+    peerSocket.data.roomId !==
+      PRIVATE_ROOM_ID
+  ) {
+
+    publicKeys.delete(
+      normalizedName
+    );
+
+    publicKeySockets.delete(
+      normalizedName
+    );
+
+    return null;
+  }
+
+
+  return peerSocket;
+
+}
+
+
+// ==================================================
 // SOCKET.IO
 // ==================================================
 
@@ -303,7 +368,6 @@ io.on(
     socket.on(
       "join",
       async (data) => {
-
 
         // --------------------------------------------------
         // Prevent joining twice
@@ -415,33 +479,51 @@ io.on(
 
 
         // ==================================================
-        // SEND EXISTING PEER PUBLIC KEY
+        // SEND CURRENT PEER PUBLIC KEY
         // ==================================================
 
-        const existingPeer =
-          Object.entries(
-            Object.fromEntries(
-              publicKeys
-            )
-          ).find(
-            ([peerName]) =>
-              peerName !== name
-          );
+        const currentName =
+          name.toLowerCase();
 
 
-        if (existingPeer) {
-
+        for (
           const [
             peerName,
             peerKey
-          ] = existingPeer;
+          ] of publicKeys.entries()
+        ) {
+
+          // Never send our own key.
+          if (
+            peerName === currentName
+          ) {
+            continue;
+          }
+
+
+          // Verify that the key belongs to
+          // a currently connected authenticated socket.
+          const peerSocket =
+            getValidPeerSocket(
+              peerName
+            );
+
+
+          if (!peerSocket) {
+            continue;
+          }
 
 
           socket.emit(
             "peerPublicKey",
             {
-              name: peerName,
-              key: peerKey
+              name:
+                ALLOWED_NAMES[
+                  peerName
+                ] || peerName,
+
+              key:
+                peerKey
             }
           );
 
@@ -487,12 +569,12 @@ io.on(
 
 
             /*
-             * Only encrypted messages are
-             * sent to the E2E client.
+             * Only E2E encrypted messages are
+             * sent to the frontend.
              *
-             * Old plaintext messages are
-             * intentionally not sent because
-             * they are not E2E encrypted.
+             * Old plaintext messages are not
+             * sent because the current client
+             * cannot safely decrypt them.
              */
 
             const encryptedHistory =
@@ -566,7 +648,6 @@ io.on(
           }
         );
 
-
       }
     );
 
@@ -579,7 +660,10 @@ io.on(
       "publicKey",
       (data) => {
 
+        // --------------------------------------------------
         // Must be authenticated
+        // --------------------------------------------------
+
         if (
           !socket.data.authenticated
         ) {
@@ -596,6 +680,10 @@ io.on(
         }
 
 
+        // --------------------------------------------------
+        // Validate data
+        // --------------------------------------------------
+
         if (
           !data ||
           typeof data !== "object"
@@ -605,23 +693,39 @@ io.on(
 
 
         if (
-          typeof data.key !==
-          "object"
+          typeof data.key !== "object" ||
+          data.key === null
         ) {
           return;
         }
 
 
-        // Store ONLY in server memory.
-        // Never store private key.
+        const keyName =
+          name.toLowerCase();
+
+
+        // --------------------------------------------------
+        // Store latest public key
+        // --------------------------------------------------
+
         publicKeys.set(
-          name.toLowerCase(),
+          keyName,
           data.key
         );
 
 
-        // Send this public key
-        // to the other authenticated user.
+        // Remember exactly which socket
+        // owns this public key.
+        publicKeySockets.set(
+          keyName,
+          socket.id
+        );
+
+
+        // --------------------------------------------------
+        // Send key to the other user
+        // --------------------------------------------------
+
         socket.to(
           PRIVATE_ROOM_ID
         ).emit(
@@ -644,6 +748,7 @@ io.on(
       "requestPeerKey",
       () => {
 
+        // Must be authenticated.
         if (
           !socket.data.authenticated
         ) {
@@ -669,9 +774,21 @@ io.on(
         ) {
 
           if (
-            peerName ===
-            currentName
+            peerName === currentName
           ) {
+            continue;
+          }
+
+
+          // Make sure the stored key belongs
+          // to a live authenticated peer.
+          const peerSocket =
+            getValidPeerSocket(
+              peerName
+            );
+
+
+          if (!peerSocket) {
             continue;
           }
 
@@ -681,7 +798,7 @@ io.on(
             {
               name:
                 ALLOWED_NAMES[
-                peerName
+                  peerName
                 ] || peerName,
 
               key:
@@ -702,7 +819,6 @@ io.on(
     socket.on(
       "message",
       async (data) => {
-
 
         // --------------------------------------------------
         // Must be authenticated
@@ -817,13 +933,15 @@ io.on(
               error.message
             );
 
+            return;
+
           }
 
         }
 
 
         // ==================================================
-        // SEND ENCRYPTED MESSAGE
+        // ENCRYPTED MESSAGE PAYLOAD
         // ==================================================
 
         const payload = {
@@ -845,13 +963,16 @@ io.on(
         };
 
 
+        // ==================================================
+        // SEND TO BOTH USERS
+        // ==================================================
+
         io.to(
           roomId
         ).emit(
           "message",
           payload
         );
-
 
       }
     );
@@ -947,10 +1068,50 @@ io.on(
           socket.data.name;
 
 
+        // --------------------------------------------------
+        // Remove stale public key
+        // --------------------------------------------------
+
+        if (name) {
+
+          const keyName =
+            name.toLowerCase();
+
+
+          const storedSocketId =
+            publicKeySockets.get(
+              keyName
+            );
+
+
+          // Only remove the key if this
+          // socket owns the current key.
+          if (
+            storedSocketId ===
+            socket.id
+          ) {
+
+            publicKeys.delete(
+              keyName
+            );
+
+            publicKeySockets.delete(
+              keyName
+            );
+
+          }
+
+        }
+
+
         if (!roomId) {
           return;
         }
 
+
+        // --------------------------------------------------
+        // Presence
+        // --------------------------------------------------
 
         socket.to(
           roomId
@@ -965,6 +1126,10 @@ io.on(
         );
 
 
+        // --------------------------------------------------
+        // System message
+        // --------------------------------------------------
+
         if (name) {
 
           socket.to(
@@ -978,7 +1143,6 @@ io.on(
 
       }
     );
-
 
   }
 );

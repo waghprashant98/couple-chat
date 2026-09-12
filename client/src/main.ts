@@ -105,11 +105,13 @@ interface PublicKeyData {
 
         </header>
 
+
         <main class="messages">
 
           <div class="date-pill">
             Today
           </div>
+
 
           @for (item of messages(); track item.id || $index) {
 
@@ -150,6 +152,7 @@ interface PublicKeyData {
           }
 
         </main>
+
 
         <form
           class="composer"
@@ -268,12 +271,12 @@ export class AppComponent implements OnDestroy {
 
 
   // ==================================================
-  // HISTORY
+  // PENDING DATA
   // ==================================================
 
   private pendingHistory?: EncryptedMessage[];
 
-  private lastHistory?: EncryptedMessage[];
+  private pendingMessages: EncryptedMessage[] = [];
 
 
   // ==================================================
@@ -380,7 +383,6 @@ export class AppComponent implements OnDestroy {
 
         this.online.set(true);
 
-        // Join first.
         this.socket?.emit(
           'join',
           {
@@ -412,7 +414,7 @@ export class AppComponent implements OnDestroy {
 
         this.pendingHistory = undefined;
 
-        this.lastHistory = undefined;
+        this.pendingMessages = [];
 
       }
     );
@@ -426,12 +428,23 @@ export class AppComponent implements OnDestroy {
       'requestPublicKey',
       async () => {
 
-        await this.sendPublicKey();
+        try {
 
-        // Also explicitly ask for the peer.
-        this.socket?.emit(
-          'requestPeerKey'
-        );
+          await this.sendPublicKey();
+
+          // Ask server for the currently connected peer.
+          this.socket?.emit(
+            'requestPeerKey'
+          );
+
+        } catch (error) {
+
+          console.error(
+            'Public key send failed:',
+            error
+          );
+
+        }
 
       }
     );
@@ -456,7 +469,7 @@ export class AppComponent implements OnDestroy {
           }
 
 
-          // Ignore our own key.
+          // Ignore our own public key.
           if (
             data.name.toLowerCase() ===
             this.name.toLowerCase()
@@ -465,7 +478,7 @@ export class AppComponent implements OnDestroy {
           }
 
 
-          const importedPeerKey =
+          this.peerPublicKey =
             await crypto.subtle.importKey(
               'jwk',
               data.key,
@@ -478,10 +491,6 @@ export class AppComponent implements OnDestroy {
             );
 
 
-          this.peerPublicKey =
-            importedPeerKey;
-
-
           await this.deriveEncryptionKey();
 
 
@@ -489,7 +498,7 @@ export class AppComponent implements OnDestroy {
 
 
           // ==================================================
-          // PROCESS HISTORY
+          // PROCESS PENDING HISTORY
           // ==================================================
 
           if (this.pendingHistory) {
@@ -504,18 +513,38 @@ export class AppComponent implements OnDestroy {
               history
             );
 
-          } else if (this.lastHistory) {
+          }
 
-            // Re-try history if a newer peer key
-            // arrived after an earlier decryption attempt.
-            await this.processHistory(
-              this.lastHistory
-            );
+
+          // ==================================================
+          // PROCESS MESSAGES THAT ARRIVED
+          // BEFORE ENCRYPTION WAS READY
+          // ==================================================
+
+          if (
+            this.pendingMessages.length
+          ) {
+
+            const pending =
+              [...this.pendingMessages];
+
+            this.pendingMessages = [];
+
+            for (
+              const message of pending
+            ) {
+
+              await this.processIncomingMessage(
+                message
+              );
+
+            }
 
           }
 
 
-          // Ask server again for the latest peer key.
+          // Ask server again to make sure
+          // we have the latest peer key.
           this.socket?.emit(
             'requestPeerKey'
           );
@@ -529,6 +558,8 @@ export class AppComponent implements OnDestroy {
           );
 
           this.encryptionReady.set(false);
+
+          this.encryptionKey = undefined;
 
         }
 
@@ -544,11 +575,7 @@ export class AppComponent implements OnDestroy {
       'history',
       async (history: EncryptedMessage[]) => {
 
-        this.lastHistory =
-          history;
-
-
-        // Wait until peer key exists.
+        // If key isn't ready, keep history.
         if (!this.encryptionKey) {
 
           this.pendingHistory =
@@ -575,59 +602,22 @@ export class AppComponent implements OnDestroy {
       'message',
       async (message: EncryptedMessage) => {
 
-        try {
+        // If peer key isn't ready yet,
+        // don't lose the message.
+        if (!this.encryptionKey) {
 
-          if (!this.encryptionKey) {
-
-            // Keep it temporarily instead of losing it.
-            this.lastHistory = [
-              ...(this.lastHistory || []),
-              message
-            ];
-
-            return;
-          }
-
-
-          const text =
-            await this.decryptMessage(
-              message.ciphertext,
-              message.iv
-            );
-
-
-          this.messages.update(
-            list => [
-              ...list,
-
-              {
-                id: message.id,
-
-                name: message.name,
-
-                text,
-
-                time: message.time,
-
-                mine:
-                  message.name.toLowerCase() ===
-                  this.name.toLowerCase()
-              }
-            ]
+          this.pendingMessages.push(
+            message
           );
 
-
-          this.scrollSoon();
-
-
-        } catch (error) {
-
-          console.error(
-            'Incoming message decryption failed:',
-            error
-          );
+          return;
 
         }
+
+
+        await this.processIncomingMessage(
+          message
+        );
 
       }
     );
@@ -735,7 +725,7 @@ export class AppComponent implements OnDestroy {
 
         this.pendingHistory = undefined;
 
-        this.lastHistory = undefined;
+        this.pendingMessages = [];
 
 
         this.loginError.set(
@@ -753,6 +743,70 @@ export class AppComponent implements OnDestroy {
 
 
   // ==================================================
+  // PROCESS INCOMING MESSAGE
+  // ==================================================
+
+  private async processIncomingMessage(
+    message: EncryptedMessage
+  ) {
+
+    if (!this.encryptionKey) {
+
+      this.pendingMessages.push(
+        message
+      );
+
+      return;
+
+    }
+
+
+    try {
+
+      const text =
+        await this.decryptMessage(
+          message.ciphertext,
+          message.iv
+        );
+
+
+      this.messages.update(
+        list => [
+          ...list,
+
+          {
+            id: message.id,
+
+            name: message.name,
+
+            text,
+
+            time: message.time,
+
+            mine:
+              message.name.toLowerCase() ===
+              this.name.toLowerCase()
+          }
+        ]
+      );
+
+
+      this.scrollSoon();
+
+
+    } catch (error) {
+
+      console.error(
+        'Incoming message decryption failed:',
+        error
+      );
+
+    }
+
+  }
+
+
+  // ==================================================
   // PROCESS / DECRYPT HISTORY
   // ==================================================
 
@@ -761,7 +815,12 @@ export class AppComponent implements OnDestroy {
   ) {
 
     if (!this.encryptionKey) {
+
+      this.pendingHistory =
+        history;
+
       return;
+
     }
 
 
@@ -782,17 +841,22 @@ export class AppComponent implements OnDestroy {
 
 
         decrypted.push({
-          id: message.id,
 
-          name: message.name,
+          id:
+            message.id,
+
+          name:
+            message.name,
 
           text,
 
-          time: message.time,
+          time:
+            message.time,
 
           mine:
             message.name.toLowerCase() ===
             this.name.toLowerCase()
+
         });
 
 
@@ -805,17 +869,23 @@ export class AppComponent implements OnDestroy {
 
 
         decrypted.push({
-          id: message.id,
 
-          name: message.name,
+          id:
+            message.id,
 
-          text: '[Unable to decrypt this message]',
+          name:
+            message.name,
 
-          time: message.time,
+          text:
+            '[Unable to decrypt this message]',
+
+          time:
+            message.time,
 
           mine:
             message.name.toLowerCase() ===
             this.name.toLowerCase()
+
         });
 
       }
@@ -849,9 +919,9 @@ export class AppComponent implements OnDestroy {
       );
 
 
-    // --------------------------------------------------
-    // Restore existing key pair
-    // --------------------------------------------------
+    // ==================================================
+    // RESTORE EXISTING KEY PAIR
+    // ==================================================
 
     if (
       savedPrivateKey &&
@@ -896,12 +966,13 @@ export class AppComponent implements OnDestroy {
 
 
       return;
+
     }
 
 
-    // --------------------------------------------------
-    // Generate new key pair
-    // --------------------------------------------------
+    // ==================================================
+    // GENERATE NEW KEY PAIR
+    // ==================================================
 
     const keyPair =
       await crypto.subtle.generateKey(
@@ -976,8 +1047,11 @@ export class AppComponent implements OnDestroy {
     this.socket.emit(
       'publicKey',
       {
-        name: this.name,
-        key: jwk
+        name:
+          this.name,
+
+        key:
+          jwk
       }
     );
 
@@ -994,9 +1068,11 @@ export class AppComponent implements OnDestroy {
       !this.privateKey ||
       !this.peerPublicKey
     ) {
+
       throw new Error(
         'E2E keys are not available.'
       );
+
     }
 
 
@@ -1004,14 +1080,20 @@ export class AppComponent implements OnDestroy {
       await crypto.subtle.deriveKey(
         {
           name: 'ECDH',
-          public: this.peerPublicKey
+
+          public:
+            this.peerPublicKey
         },
+
         this.privateKey,
+
         {
           name: 'AES-GCM',
           length: 256
         },
+
         false,
+
         [
           'encrypt',
           'decrypt'
@@ -1035,9 +1117,11 @@ export class AppComponent implements OnDestroy {
     if (
       !this.encryptionKey
     ) {
+
       throw new Error(
         'Encryption key is not ready.'
       );
+
     }
 
 
@@ -1059,12 +1143,15 @@ export class AppComponent implements OnDestroy {
           name: 'AES-GCM',
           iv
         },
+
         this.encryptionKey,
+
         encoded
       );
 
 
     return {
+
       ciphertext:
         this.arrayBufferToBase64(
           encrypted
@@ -1074,6 +1161,7 @@ export class AppComponent implements OnDestroy {
         this.arrayBufferToBase64(
           iv
         )
+
     };
 
   }
@@ -1091,9 +1179,11 @@ export class AppComponent implements OnDestroy {
     if (
       !this.encryptionKey
     ) {
+
       throw new Error(
         'Encryption key is not ready.'
       );
+
     }
 
 
@@ -1113,9 +1203,12 @@ export class AppComponent implements OnDestroy {
       await crypto.subtle.decrypt(
         {
           name: 'AES-GCM',
-          iv: initializationVector
+          iv:
+            initializationVector
         },
+
         this.encryptionKey,
+
         encrypted
       );
 
@@ -1147,13 +1240,18 @@ export class AppComponent implements OnDestroy {
     for (
       const byte of bytes
     ) {
-      binary += String.fromCharCode(
-        byte
-      );
+
+      binary +=
+        String.fromCharCode(
+          byte
+        );
+
     }
 
 
-    return btoa(binary);
+    return btoa(
+      binary
+    );
 
   }
 
@@ -1177,8 +1275,10 @@ export class AppComponent implements OnDestroy {
       i < binary.length;
       i++
     ) {
+
       bytes[i] =
         binary.charCodeAt(i);
+
     }
 
 
@@ -1208,6 +1308,25 @@ export class AppComponent implements OnDestroy {
 
 
     try {
+
+      // Make absolutely sure the key still exists.
+      if (
+        !this.encryptionKey ||
+        !this.peerPublicKey
+      ) {
+
+        this.encryptionReady.set(
+          false
+        );
+
+        this.socket.emit(
+          'requestPeerKey'
+        );
+
+        return;
+
+      }
+
 
       const encrypted =
         await this.encryptMessage(
@@ -1242,7 +1361,7 @@ export class AppComponent implements OnDestroy {
 
 
   // ==================================================
-  // TYPING
+  // TYPING HANDLER
   // ==================================================
 
   handleTyping() {
@@ -1274,6 +1393,7 @@ export class AppComponent implements OnDestroy {
           );
 
         },
+
         900
       );
 
@@ -1281,7 +1401,7 @@ export class AppComponent implements OnDestroy {
 
 
   // ==================================================
-  // TIME
+  // WHATSAPP STYLE TIME
   // ==================================================
 
   formatTime(
@@ -1294,7 +1414,9 @@ export class AppComponent implements OnDestroy {
 
 
     const date =
-      new Date(time);
+      new Date(
+        time
+      );
 
 
     if (
@@ -1302,16 +1424,23 @@ export class AppComponent implements OnDestroy {
         date.getTime()
       )
     ) {
+
       return time;
+
     }
 
 
     return date.toLocaleTimeString(
       'en-IN',
       {
-        hour: 'numeric',
-        minute: '2-digit',
-        hour12: true
+        hour:
+          'numeric',
+
+        minute:
+          '2-digit',
+
+        hour12:
+          true
       }
     );
 
@@ -1369,4 +1498,6 @@ export class AppComponent implements OnDestroy {
 
 bootstrapApplication(
   AppComponent
-).catch(console.error);
+).catch(
+  console.error
+);
