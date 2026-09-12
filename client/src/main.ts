@@ -64,7 +64,7 @@ interface ChatMessage {
 
           <div class="head-text">
 
-            <h2>Our Chat</h2>
+            <h2>My Love</h2>
 
             <span [class.offline]="!online()">
               <i></i>
@@ -72,8 +72,6 @@ interface ChatMessage {
             </span>
 
           </div>
-
-          <div class="dots">•••</div>
 
         </header>
 
