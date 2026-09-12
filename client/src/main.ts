@@ -46,11 +46,27 @@ interface ChatMessage {
             required
           >
 
+          <input
+            [(ngModel)]="passcode"
+            name="passcode"
+            type="password"
+            maxlength="50"
+            placeholder="Passcode"
+            autocomplete="off"
+            required
+          >
+
           <button type="submit">
             Enter chat <span>→</span>
           </button>
 
         </form>
+
+        @if (loginError()) {
+          <p class="login-error">
+            {{ loginError() }}
+          </p>
+        }
 
       </section>
 
@@ -155,18 +171,33 @@ interface ChatMessage {
   </div>
   `,
 
-  styles: [``]
+  styles: [`
+    .login-error {
+      margin: 14px 0 0;
+      color: #c05270;
+      font-size: 12px;
+      font-weight: 600;
+    }
+  `]
 })
 export class AppComponent implements OnDestroy {
 
   // ==================================================
   // FIXED PRIVATE ROOM
   // ==================================================
-  // Room ID user ko enter nahi karna padega.
-  // Dono users automatically isi room mein jayenge.
+
+  private readonly roomId =
+    'our-private-chat-9x7m2k8p';
+
+
+  // ==================================================
+  // ALLOWED NAMES
   // ==================================================
 
-  private readonly roomId = 'our-private-chat-9x7m2k8p';
+  private readonly allowedNames = [
+    'prashant',
+    'manjushree'
+  ];
 
 
   joined = signal(false);
@@ -175,9 +206,13 @@ export class AppComponent implements OnDestroy {
 
   typing = signal('');
 
+  loginError = signal('');
+
   messages = signal<ChatMessage[]>([]);
 
   name = '';
+
+  passcode = '';
 
   draft = '';
 
@@ -196,9 +231,55 @@ export class AppComponent implements OnDestroy {
       .trim()
       .slice(0, 24);
 
+    const normalizedName =
+      this.name.toLowerCase();
+
+
+    // ==================================================
+    // NAME VALIDATION
+    // ==================================================
+
     if (!this.name) {
+
+      this.loginError.set(
+        'Please enter your name.'
+      );
+
       return;
     }
+
+
+    if (
+      !this.allowedNames.includes(
+        normalizedName
+      )
+    ) {
+
+      this.loginError.set(
+        'Only Prashant or Manjushree can enter.'
+      );
+
+      return;
+    }
+
+
+    // ==================================================
+    // PASSCODE VALIDATION
+    // ==================================================
+
+    if (!this.passcode.trim()) {
+
+      this.loginError.set(
+        'Please enter the passcode.'
+      );
+
+      return;
+    }
+
+
+    // Clear previous error
+    this.loginError.set('');
+
 
     this.joined.set(true);
 
@@ -213,10 +294,10 @@ export class AppComponent implements OnDestroy {
 
       this.online.set(true);
 
-      // Server expects roomId + name
       this.socket?.emit('join', {
         roomId: this.roomId,
-        name: this.name
+        name: this.name,
+        passcode: this.passcode
       });
 
     });
@@ -244,7 +325,9 @@ export class AppComponent implements OnDestroy {
         this.messages.set(
           history.map(message => ({
             ...message,
-            mine: message.name === this.name
+            mine:
+              message.name.toLowerCase() ===
+              this.name.toLowerCase()
           }))
         );
 
@@ -266,7 +349,9 @@ export class AppComponent implements OnDestroy {
           ...list,
           {
             ...message,
-            mine: message.name === this.name
+            mine:
+              message.name.toLowerCase() ===
+              this.name.toLowerCase()
           }
         ]);
 
@@ -307,7 +392,10 @@ export class AppComponent implements OnDestroy {
       'typing',
       (who: string) => {
 
-        if (who === this.name) {
+        if (
+          who.toLowerCase() ===
+          this.name.toLowerCase()
+        ) {
           return;
         }
 
@@ -315,12 +403,15 @@ export class AppComponent implements OnDestroy {
           `${who} is typing…`
         );
 
-        clearTimeout(this.typingTimer);
-
-        this.typingTimer = setTimeout(
-          () => this.typing.set(''),
-          1400
+        clearTimeout(
+          this.typingTimer
         );
+
+        this.typingTimer =
+          setTimeout(
+            () => this.typing.set(''),
+            1400
+          );
 
       }
     );
@@ -355,6 +446,15 @@ export class AppComponent implements OnDestroy {
 
         this.joined.set(false);
 
+        this.online.set(false);
+
+        this.loginError.set(
+          error || 'Unable to enter the chat.'
+        );
+
+        // Disconnect rejected socket
+        this.socket?.disconnect();
+
       }
     );
 
@@ -367,7 +467,8 @@ export class AppComponent implements OnDestroy {
 
   send() {
 
-    const text = this.draft.trim();
+    const text =
+      this.draft.trim();
 
     if (
       !text ||
@@ -412,14 +513,15 @@ export class AppComponent implements OnDestroy {
       this.typingTimer
     );
 
-    this.typingTimer = setTimeout(
-      () => {
-        this.socket?.emit(
-          'stopTyping'
-        );
-      },
-      900
-    );
+    this.typingTimer =
+      setTimeout(
+        () => {
+          this.socket?.emit(
+            'stopTyping'
+          );
+        },
+        900
+      );
 
   }
 
@@ -428,15 +530,22 @@ export class AppComponent implements OnDestroy {
   // WHATSAPP STYLE TIME
   // ==================================================
 
-  formatTime(time: string): string {
+  formatTime(
+    time: string
+  ): string {
 
     if (!time) {
       return '';
     }
 
-    const date = new Date(time);
+    const date =
+      new Date(time);
 
-    if (isNaN(date.getTime())) {
+    if (
+      isNaN(
+        date.getTime()
+      )
+    ) {
       return time;
     }
 

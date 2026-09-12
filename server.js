@@ -1,20 +1,43 @@
 const express = require("express");
 const http = require("http");
 const path = require("path");
+const crypto = require("crypto");
 const { Server } = require("socket.io");
 const { Pool } = require("pg");
 
 const app = express();
 const server = http.createServer(app);
 
+
+// ==================================================
+// SOCKET.IO
+// ==================================================
+
+const allowedOrigins = [
+  "https://couple-chat-8msk.onrender.com",
+  "http://localhost:4200"
+];
+
 const io = new Server(server, {
   cors: {
-    origin: true,
+    origin: allowedOrigins,
     credentials: false
-  }
+  },
+
+  maxHttpBufferSize: 10000
 });
 
+
+// ==================================================
+// PORT
+// ==================================================
+
 const PORT = process.env.PORT || 3000;
+
+
+// ==================================================
+// ANGULAR BUILD
+// ==================================================
 
 const clientDist = path.join(
   __dirname,
@@ -24,26 +47,53 @@ const clientDist = path.join(
   "browser"
 );
 
-// =========================
+
+// ==================================================
+// PRIVATE CHAT SETTINGS
+// ==================================================
+
+const PRIVATE_ROOM_ID =
+  "our-private-chat-9x7m2k8p";
+
+const ALLOWED_NAMES = {
+  prashant: "Prashant",
+  manjushree: "Manjushree"
+};
+
+const CHAT_PASSCODE =
+  String(process.env.CHAT_PASSCODE || "");
+
+
+// ==================================================
 // PostgreSQL / Supabase
-// =========================
+// ==================================================
 
 const pool = process.env.DATABASE_URL
   ? new Pool({
       connectionString: process.env.DATABASE_URL,
+
       ssl: {
         rejectUnauthorized: false
       }
     })
   : null;
 
+
+// ==================================================
+// DATABASE INITIALIZATION
+// ==================================================
+
 async function initDb() {
+
   if (!pool) {
+
     console.warn(
       "DATABASE_URL is not set. Chat history will not be saved."
     );
+
     return;
   }
+
 
   await pool.query(`
     CREATE TABLE IF NOT EXISTS messages (
@@ -58,20 +108,24 @@ async function initDb() {
       ON messages(room_id, created_at);
   `);
 
+
   console.log("PostgreSQL ready");
 }
 
-// =========================
-// Static Angular files
-// =========================
+
+// ==================================================
+// STATIC ANGULAR FILES
+// ==================================================
 
 app.use(express.static(clientDist));
 
-// =========================
-// Helpers
-// =========================
+
+// ==================================================
+// HELPERS
+// ==================================================
 
 function cleanRoom(value) {
+
   return String(value || "")
     .trim()
     .toLowerCase()
@@ -79,72 +133,217 @@ function cleanRoom(value) {
     .slice(0, 100);
 }
 
-function cleanName(value) {
-  return (
+
+function getAllowedName(value) {
+
+  const normalized =
     String(value || "")
       .trim()
-      .slice(0, 24) || "Someone"
+      .toLowerCase()
+      .slice(0, 24);
+
+  return ALLOWED_NAMES[normalized] || null;
+}
+
+
+function cleanMessage(value) {
+
+  return String(value || "")
+    .trim()
+    .slice(0, 2000);
+}
+
+
+// ==================================================
+// PASSCODE CHECK
+// ==================================================
+
+function isValidPasscode(value) {
+
+  if (!CHAT_PASSCODE) {
+    return false;
+  }
+
+
+  const provided =
+    Buffer.from(String(value || ""));
+
+  const expected =
+    Buffer.from(CHAT_PASSCODE);
+
+
+  if (
+    provided.length !==
+    expected.length
+  ) {
+    return false;
+  }
+
+
+  return crypto.timingSafeEqual(
+    provided,
+    expected
   );
 }
 
-// =========================
-// Socket.IO
-// =========================
+
+// ==================================================
+// SOCKET.IO
+// ==================================================
 
 io.on("connection", (socket) => {
 
-  // =========================
-  // Join Room
-  // =========================
+  // ==================================================
+  // JOIN ROOM
+  // ==================================================
 
   socket.on("join", async (data) => {
 
-    const roomId = cleanRoom(data?.roomId);
-    const name = cleanName(data?.name);
+    // --------------------------------------------------
+    // Prevent joining twice
+    // --------------------------------------------------
 
-    if (!roomId) {
-      socket.emit(
-        "joinError",
-        "Please enter a room code."
-      );
+    if (socket.data.authenticated) {
       return;
     }
 
-    socket.data.roomId = roomId;
-    socket.data.name = name;
 
-    socket.join(roomId);
+    // --------------------------------------------------
+    // Check passcode configuration
+    // --------------------------------------------------
 
-    // =========================
-    // Load Chat History
-    // =========================
+    if (!CHAT_PASSCODE) {
+
+      socket.emit(
+        "joinError",
+        "Chat security is not configured."
+      );
+
+      return;
+    }
+
+
+    // --------------------------------------------------
+    // Name
+    // --------------------------------------------------
+
+    const name =
+      getAllowedName(data?.name);
+
+
+    if (!name) {
+
+      socket.emit(
+        "joinError",
+        "Only Prashant or Manjushree can enter."
+      );
+
+      return;
+    }
+
+
+    // --------------------------------------------------
+    // Passcode
+    // --------------------------------------------------
+
+    if (
+      !isValidPasscode(
+        data?.passcode
+      )
+    ) {
+
+      socket.emit(
+        "joinError",
+        "Incorrect passcode."
+      );
+
+      return;
+    }
+
+
+    // --------------------------------------------------
+    // Room
+    // --------------------------------------------------
+
+    const requestedRoom =
+      cleanRoom(data?.roomId);
+
+
+    if (
+      requestedRoom !==
+      PRIVATE_ROOM_ID
+    ) {
+
+      socket.emit(
+        "joinError",
+        "Invalid private room."
+      );
+
+      return;
+    }
+
+
+    // --------------------------------------------------
+    // Authenticate socket
+    // --------------------------------------------------
+
+    socket.data.roomId =
+      PRIVATE_ROOM_ID;
+
+    socket.data.name =
+      name;
+
+    socket.data.authenticated =
+      true;
+
+
+    socket.join(
+      PRIVATE_ROOM_ID
+    );
+
+
+    // ==================================================
+    // LOAD CHAT HISTORY
+    // ==================================================
 
     if (pool) {
+
       try {
 
-        const result = await pool.query(
-          `
-          SELECT id, sender, message, created_at
-          FROM messages
-          WHERE room_id = $1
-          ORDER BY created_at ASC
-          LIMIT 200
-          `,
-          [roomId]
-        );
+        const result =
+          await pool.query(
+            `
+            SELECT
+              id,
+              sender,
+              message,
+              created_at
+            FROM messages
+            WHERE room_id = $1
+            ORDER BY created_at ASC
+            LIMIT 200
+            `,
+            [PRIVATE_ROOM_ID]
+          );
+
 
         socket.emit(
           "history",
+
           result.rows.map((row) => ({
             id: String(row.id),
+
             name: row.sender,
+
             text: row.message,
 
-            // Send ISO timestamp.
-            // Browser will convert it to local time.
-            time: new Date(row.created_at).toISOString()
+            time:
+              new Date(
+                row.created_at
+              ).toISOString()
           }))
         );
+
 
       } catch (error) {
 
@@ -154,40 +353,64 @@ io.on("connection", (socket) => {
         );
 
       }
+
     }
 
-    // =========================
-    // Notify Other User
-    // =========================
 
-    socket.to(roomId).emit(
+    // ==================================================
+    // NOTIFY OTHER USER
+    // ==================================================
+
+    socket.to(
+      PRIVATE_ROOM_ID
+    ).emit(
       "system",
       `${name} joined the room ❤️`
     );
 
-    socket.to(roomId).emit(
+
+    socket.to(
+      PRIVATE_ROOM_ID
+    ).emit(
       "presence",
       {
         count:
-          io.sockets.adapter.rooms.get(roomId)?.size || 1
+          io.sockets.adapter.rooms
+            .get(PRIVATE_ROOM_ID)
+            ?.size || 1
       }
     );
 
   });
 
 
-  // =========================
-  // Send Message
-  // =========================
+  // ==================================================
+  // SEND MESSAGE
+  // ==================================================
 
   socket.on("message", async (text) => {
 
-    const roomId = socket.data.roomId;
-    const name = socket.data.name;
+    // --------------------------------------------------
+    // Must be authenticated
+    // --------------------------------------------------
 
-    const cleanText = String(text || "")
-      .trim()
-      .slice(0, 2000);
+    if (
+      !socket.data.authenticated
+    ) {
+      return;
+    }
+
+
+    const roomId =
+      socket.data.roomId;
+
+    const name =
+      socket.data.name;
+
+
+    const cleanText =
+      cleanMessage(text);
+
 
     if (
       !roomId ||
@@ -197,45 +420,53 @@ io.on("connection", (socket) => {
       return;
     }
 
+
     let savedId =
       `${Date.now()}-${Math.random()
         .toString(16)
         .slice(2)}`;
 
+
     let messageTime =
       new Date().toISOString();
 
 
-    // =========================
-    // Save Message to Database
-    // =========================
+    // ==================================================
+    // SAVE MESSAGE
+    // ==================================================
 
     if (pool) {
 
       try {
 
-        const result = await pool.query(
-          `
-          INSERT INTO messages
-            (room_id, sender, message)
-          VALUES
-            ($1, $2, $3)
-          RETURNING id, created_at
-          `,
-          [
-            roomId,
-            name,
-            cleanText
-          ]
-        );
+        const result =
+          await pool.query(
+            `
+            INSERT INTO messages
+              (room_id, sender, message)
+            VALUES
+              ($1, $2, $3)
+            RETURNING id, created_at
+            `,
+            [
+              roomId,
+              name,
+              cleanText
+            ]
+          );
+
 
         savedId =
-          String(result.rows[0].id);
+          String(
+            result.rows[0].id
+          );
+
 
         messageTime =
           new Date(
             result.rows[0].created_at
           ).toISOString();
+
 
       } catch (error) {
 
@@ -249,21 +480,26 @@ io.on("connection", (socket) => {
     }
 
 
-    // =========================
-    // Send Message to Room
-    // =========================
+    // ==================================================
+    // SEND MESSAGE TO ROOM
+    // ==================================================
 
     const payload = {
+
       id: savedId,
+
       name,
+
       text: cleanText,
 
-      // ISO timestamp.
-      // Frontend converts this to local time.
       time: messageTime
+
     };
 
-    io.to(roomId).emit(
+
+    io.to(
+      roomId
+    ).emit(
       "message",
       payload
     );
@@ -271,18 +507,28 @@ io.on("connection", (socket) => {
   });
 
 
-  // =========================
-  // Typing
-  // =========================
+  // ==================================================
+  // TYPING
+  // ==================================================
 
   socket.on("typing", () => {
+
+    if (
+      !socket.data.authenticated
+    ) {
+      return;
+    }
+
 
     const roomId =
       socket.data.roomId;
 
+
     if (roomId) {
 
-      socket.to(roomId).emit(
+      socket.to(
+        roomId
+      ).emit(
         "typing",
         socket.data.name
       );
@@ -292,18 +538,28 @@ io.on("connection", (socket) => {
   });
 
 
-  // =========================
-  // Stop Typing
-  // =========================
+  // ==================================================
+  // STOP TYPING
+  // ==================================================
 
   socket.on("stopTyping", () => {
+
+    if (
+      !socket.data.authenticated
+    ) {
+      return;
+    }
+
 
     const roomId =
       socket.data.roomId;
 
+
     if (roomId) {
 
-      socket.to(roomId).emit(
+      socket.to(
+        roomId
+      ).emit(
         "stopTyping"
       );
 
@@ -312,11 +568,18 @@ io.on("connection", (socket) => {
   });
 
 
-  // =========================
-  // Disconnect
-  // =========================
+  // ==================================================
+  // DISCONNECT
+  // ==================================================
 
   socket.on("disconnect", () => {
+
+    if (
+      !socket.data.authenticated
+    ) {
+      return;
+    }
+
 
     const roomId =
       socket.data.roomId;
@@ -324,21 +587,30 @@ io.on("connection", (socket) => {
     const name =
       socket.data.name;
 
+
     if (!roomId) {
       return;
     }
 
-    socket.to(roomId).emit(
+
+    socket.to(
+      roomId
+    ).emit(
       "presence",
       {
         count:
-          io.sockets.adapter.rooms.get(roomId)?.size || 0
+          io.sockets.adapter.rooms
+            .get(roomId)
+            ?.size || 0
       }
     );
 
+
     if (name) {
 
-      socket.to(roomId).emit(
+      socket.to(
+        roomId
+      ).emit(
         "system",
         `${name} left`
       );
@@ -350,9 +622,9 @@ io.on("connection", (socket) => {
 });
 
 
-// =========================
-// Angular Fallback
-// =========================
+// ==================================================
+// ANGULAR FALLBACK
+// ==================================================
 
 app.get("*", (_, res) => {
 
@@ -366,9 +638,9 @@ app.get("*", (_, res) => {
 });
 
 
-// =========================
-// Start Server
-// =========================
+// ==================================================
+// START SERVER
+// ==================================================
 
 initDb()
   .then(() => {
@@ -376,9 +648,11 @@ initDb()
     server.listen(
       PORT,
       () => {
+
         console.log(
           `Running on port ${PORT}`
         );
+
       }
     );
 
@@ -389,6 +663,7 @@ initDb()
       "Database initialization failed:",
       error.message
     );
+
 
     server.listen(
       PORT,
