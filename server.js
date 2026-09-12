@@ -76,35 +76,27 @@ const CHAT_PASSCODE =
 const pool =
   process.env.DATABASE_URL
     ? new Pool({
-      connectionString:
-        process.env.DATABASE_URL,
+        connectionString:
+          process.env.DATABASE_URL,
 
-      ssl: {
-        rejectUnauthorized: false
-      }
-    })
+        ssl: {
+          rejectUnauthorized: false
+        }
+      })
     : null;
 
 
 // ==================================================
-// E2E PUBLIC KEYS
+// IN-MEMORY ONLINE SOCKETS
 //
-// Public keys are kept only in server memory.
-// Private keys NEVER reach the server.
+// Only presence information is kept in memory.
+// Public keys are now stored persistently in DB.
 //
-// publicKeys:
-//   username -> public JWK
-//
-// publicKeySockets:
-//   username -> socket.id
-//
-// The second map prevents stale public keys
-// from being used after a browser disconnects.
+// username -> socket.id
 // ==================================================
 
-const publicKeys = new Map();
-
-const publicKeySockets = new Map();
+const activeSockets =
+  new Map();
 
 
 // ==================================================
@@ -116,7 +108,7 @@ async function initDb() {
   if (!pool) {
 
     console.warn(
-      "DATABASE_URL is not set. Chat history will not be saved."
+      "DATABASE_URL is not set. Chat history and persistent keys will not be saved."
     );
 
     return;
@@ -131,6 +123,7 @@ async function initDb() {
       message TEXT,
       ciphertext TEXT,
       iv TEXT,
+      reply_to_id BIGINT,
       created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
     );
 
@@ -141,10 +134,29 @@ async function initDb() {
       ADD COLUMN IF NOT EXISTS iv TEXT;
 
     ALTER TABLE messages
+      ADD COLUMN IF NOT EXISTS reply_to_id BIGINT;
+
+    ALTER TABLE messages
       ALTER COLUMN message DROP NOT NULL;
 
     CREATE INDEX IF NOT EXISTS messages_room_created_idx
       ON messages(room_id, created_at);
+
+    CREATE INDEX IF NOT EXISTS messages_reply_idx
+      ON messages(reply_to_id);
+
+
+    CREATE TABLE IF NOT EXISTS chat_public_keys (
+      username VARCHAR(24) PRIMARY KEY,
+      public_key JSONB NOT NULL,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+
+
+    CREATE TABLE IF NOT EXISTS chat_presence (
+      username VARCHAR(24) PRIMARY KEY,
+      last_seen TIMESTAMPTZ
+    );
   `);
 
 
@@ -194,6 +206,33 @@ function getAllowedName(value) {
     ALLOWED_NAMES[normalized] ||
     null
   );
+
+}
+
+
+function getPeerName(name) {
+
+  const normalized =
+    String(name || "")
+      .trim()
+      .toLowerCase();
+
+
+  if (
+    normalized === "prashant"
+  ) {
+    return "Manjushree";
+  }
+
+
+  if (
+    normalized === "manjushree"
+  ) {
+    return "Prashant";
+  }
+
+
+  return null;
 
 }
 
@@ -275,8 +314,6 @@ function isValidEncryptedMessage(data) {
   }
 
 
-  // Keep encrypted payload safely below
-  // Socket.IO maxHttpBufferSize.
   if (
     data.ciphertext.length >
     9000
@@ -299,55 +336,374 @@ function isValidEncryptedMessage(data) {
 
 
 // ==================================================
-// CHECK CURRENT PEER SOCKET
+// GET STORED PUBLIC KEY
 // ==================================================
 
-function getValidPeerSocket(
-  peerName
+async function getStoredPublicKey(
+  username
 ) {
 
-  const normalizedName =
-    String(peerName || "")
-      .toLowerCase();
-
-
-  const socketId =
-    publicKeySockets.get(
-      normalizedName
-    );
-
-
-  if (!socketId) {
+  if (!pool) {
     return null;
   }
 
 
-  const peerSocket =
+  const result =
+    await pool.query(
+      `
+      SELECT
+        username,
+        public_key
+      FROM chat_public_keys
+      WHERE username = $1
+      LIMIT 1
+      `,
+      [
+        String(
+          username
+        ).toLowerCase()
+      ]
+    );
+
+
+  if (
+    !result.rows.length
+  ) {
+    return null;
+  }
+
+
+  return result.rows[0].public_key;
+
+}
+
+
+// ==================================================
+// SAVE PUBLIC KEY
+// ==================================================
+
+async function savePublicKey(
+  username,
+  publicKey
+) {
+
+  if (!pool) {
+    return;
+  }
+
+
+  await pool.query(
+    `
+    INSERT INTO chat_public_keys
+      (
+        username,
+        public_key,
+        updated_at
+      )
+    VALUES
+      (
+        $1,
+        $2::jsonb,
+        NOW()
+      )
+    ON CONFLICT (username)
+    DO UPDATE SET
+      public_key = EXCLUDED.public_key,
+      updated_at = NOW()
+    `,
+    [
+      String(
+        username
+      ).toLowerCase(),
+
+      JSON.stringify(
+        publicKey
+      )
+    ]
+  );
+
+}
+
+
+// ==================================================
+// SAVE LAST SEEN
+// ==================================================
+
+async function saveLastSeen(
+  username
+) {
+
+  if (!pool) {
+    return;
+  }
+
+
+  await pool.query(
+    `
+    INSERT INTO chat_presence
+      (
+        username,
+        last_seen
+      )
+    VALUES
+      (
+        $1,
+        NOW()
+      )
+    ON CONFLICT (username)
+    DO UPDATE SET
+      last_seen = NOW()
+    `,
+    [
+      String(
+        username
+      ).toLowerCase()
+    ]
+  );
+
+}
+
+
+// ==================================================
+// GET LAST SEEN
+// ==================================================
+
+async function getLastSeen(
+  username
+) {
+
+  if (!pool) {
+    return null;
+  }
+
+
+  const result =
+    await pool.query(
+      `
+      SELECT
+        last_seen
+      FROM chat_presence
+      WHERE username = $1
+      LIMIT 1
+      `,
+      [
+        String(
+          username
+        ).toLowerCase()
+      ]
+    );
+
+
+  if (
+    !result.rows.length ||
+    !result.rows[0].last_seen
+  ) {
+    return null;
+  }
+
+
+  return new Date(
+    result.rows[0].last_seen
+  ).toISOString();
+
+}
+
+
+// ==================================================
+// GET ONLINE STATUS
+// ==================================================
+
+function isUserOnline(
+  username
+) {
+
+  const socketId =
+    activeSockets.get(
+      String(
+        username
+      ).toLowerCase()
+    );
+
+
+  if (!socketId) {
+    return false;
+  }
+
+
+  const socket =
     io.sockets.sockets.get(
       socketId
     );
 
 
-  if (
-    !peerSocket ||
-    !peerSocket.data.authenticated ||
-    peerSocket.data.roomId !==
+  return !!(
+    socket &&
+    socket.data.authenticated &&
+    socket.data.roomId ===
       PRIVATE_ROOM_ID
+  );
+
+}
+
+
+// ==================================================
+// SEND PRESENCE TO USER
+// ==================================================
+
+async function sendPeerPresence(
+  socket
+) {
+
+  if (
+    !socket.data.authenticated
   ) {
-
-    publicKeys.delete(
-      normalizedName
-    );
-
-    publicKeySockets.delete(
-      normalizedName
-    );
-
-    return null;
+    return;
   }
 
 
-  return peerSocket;
+  const peerName =
+    getPeerName(
+      socket.data.name
+    );
+
+
+  if (!peerName) {
+    return;
+  }
+
+
+  const online =
+    isUserOnline(
+      peerName
+    );
+
+
+  let lastSeen =
+    null;
+
+
+  if (!online) {
+
+    try {
+
+      lastSeen =
+        await getLastSeen(
+          peerName
+        );
+
+    } catch (error) {
+
+      console.error(
+        "Last seen error:",
+        error.message
+      );
+
+    }
+
+  }
+
+
+  socket.emit(
+    "presence",
+    {
+      name:
+        peerName,
+
+      online,
+
+      lastSeen
+    }
+  );
+
+}
+
+
+// ==================================================
+// BROADCAST PEER PRESENCE
+// ==================================================
+
+async function broadcastPresence(
+  username
+) {
+
+  const peerName =
+    getPeerName(
+      username
+    );
+
+
+  if (!peerName) {
+    return;
+  }
+
+
+  const peerSocketId =
+    activeSockets.get(
+      peerName.toLowerCase()
+    );
+
+
+  if (!peerSocketId) {
+    return;
+  }
+
+
+  const peerSocket =
+    io.sockets.sockets.get(
+      peerSocketId
+    );
+
+
+  if (
+    !peerSocket ||
+    !peerSocket.data.authenticated
+  ) {
+    return;
+  }
+
+
+  const online =
+    isUserOnline(
+      username
+    );
+
+
+  let lastSeen =
+    null;
+
+
+  if (!online) {
+
+    try {
+
+      lastSeen =
+        await getLastSeen(
+          username
+        );
+
+    } catch (error) {
+
+      console.error(
+        "Presence error:",
+        error.message
+      );
+
+    }
+
+  }
+
+
+  peerSocket.emit(
+    "presence",
+    {
+      name:
+        username,
+
+      online,
+
+      lastSeen
+    }
+  );
 
 }
 
@@ -369,10 +725,6 @@ io.on(
       "join",
       async (data) => {
 
-        // --------------------------------------------------
-        // Prevent joining twice
-        // --------------------------------------------------
-
         if (
           socket.data.authenticated
         ) {
@@ -381,7 +733,7 @@ io.on(
 
 
         // --------------------------------------------------
-        // Check passcode configuration
+        // SECURITY CONFIG
         // --------------------------------------------------
 
         if (!CHAT_PASSCODE) {
@@ -396,7 +748,7 @@ io.on(
 
 
         // --------------------------------------------------
-        // Validate name
+        // NAME
         // --------------------------------------------------
 
         const name =
@@ -417,7 +769,7 @@ io.on(
 
 
         // --------------------------------------------------
-        // Validate passcode
+        // PASSCODE
         // --------------------------------------------------
 
         if (
@@ -436,7 +788,7 @@ io.on(
 
 
         // --------------------------------------------------
-        // Validate room
+        // ROOM
         // --------------------------------------------------
 
         const requestedRoom =
@@ -459,9 +811,51 @@ io.on(
         }
 
 
-        // --------------------------------------------------
-        // Authenticate socket
-        // --------------------------------------------------
+        // ==================================================
+        // PREVENT SAME USER FROM HAVING MULTIPLE
+        // ACTIVE SESSIONS
+        // ==================================================
+
+        const normalizedName =
+          name.toLowerCase();
+
+
+        const oldSocketId =
+          activeSockets.get(
+            normalizedName
+          );
+
+
+        if (
+          oldSocketId &&
+          oldSocketId !== socket.id
+        ) {
+
+          const oldSocket =
+            io.sockets.sockets.get(
+              oldSocketId
+            );
+
+
+          if (oldSocket) {
+
+            oldSocket.emit(
+              "system",
+              "This account was opened in another tab/device."
+            );
+
+            oldSocket.disconnect(
+              true
+            );
+
+          }
+
+        }
+
+
+        // ==================================================
+        // AUTHENTICATE
+        // ==================================================
 
         socket.data.roomId =
           PRIVATE_ROOM_ID;
@@ -478,60 +872,106 @@ io.on(
         );
 
 
+        activeSockets.set(
+          normalizedName,
+          socket.id
+        );
+
+
         // ==================================================
-        // SEND CURRENT PEER PUBLIC KEY
+        // UPDATE PRESENCE
         // ==================================================
 
-        const currentName =
-          name.toLowerCase();
+        if (pool) {
 
+          try {
 
-        for (
-          const [
-            peerName,
-            peerKey
-          ] of publicKeys.entries()
-        ) {
-
-          // Never send our own key.
-          if (
-            peerName === currentName
-          ) {
-            continue;
-          }
-
-
-          // Verify that the key belongs to
-          // a currently connected authenticated socket.
-          const peerSocket =
-            getValidPeerSocket(
-              peerName
+            await pool.query(
+              `
+              INSERT INTO chat_presence
+                (
+                  username,
+                  last_seen
+                )
+              VALUES
+                (
+                  $1,
+                  NULL
+                )
+              ON CONFLICT (username)
+              DO UPDATE SET
+                last_seen = NULL
+              `,
+              [
+                normalizedName
+              ]
             );
 
+          } catch (error) {
 
-          if (!peerSocket) {
-            continue;
+            console.error(
+              "Presence save error:",
+              error.message
+            );
+
           }
-
-
-          socket.emit(
-            "peerPublicKey",
-            {
-              name:
-                ALLOWED_NAMES[
-                  peerName
-                ] || peerName,
-
-              key:
-                peerKey
-            }
-          );
 
         }
 
 
         // ==================================================
-        // ASK THIS CLIENT FOR PUBLIC KEY
+        // SEND PEER PUBLIC KEY
+        //
+        // IMPORTANT:
+        // This key comes from DB, so peer does NOT
+        // need to be online.
+        // ==================================================
+
+        const peerName =
+          getPeerName(
+            name
+          );
+
+
+        if (peerName) {
+
+          try {
+
+            const peerKey =
+              await getStoredPublicKey(
+                peerName
+              );
+
+
+            if (peerKey) {
+
+              socket.emit(
+                "peerPublicKey",
+                {
+                  name:
+                    peerName,
+
+                  key:
+                    peerKey
+                }
+              );
+
+            }
+
+          } catch (error) {
+
+            console.error(
+              "Public key load error:",
+              error.message
+            );
+
+          }
+
+        }
+
+
+        // ==================================================
+        // ASK CLIENT FOR ITS PUBLIC KEY
         // ==================================================
 
         socket.emit(
@@ -556,6 +996,7 @@ io.on(
                   message,
                   ciphertext,
                   iv,
+                  reply_to_id,
                   created_at
                 FROM messages
                 WHERE room_id = $1
@@ -568,15 +1009,6 @@ io.on(
               );
 
 
-            /*
-             * Only E2E encrypted messages are
-             * sent to the frontend.
-             *
-             * Old plaintext messages are not
-             * sent because the current client
-             * cannot safely decrypt them.
-             */
-
             const encryptedHistory =
               result.rows
                 .filter(
@@ -587,7 +1019,9 @@ io.on(
                 .map(
                   row => ({
                     id:
-                      String(row.id),
+                      String(
+                        row.id
+                      ),
 
                     name:
                       row.sender,
@@ -597,6 +1031,13 @@ io.on(
 
                     iv:
                       row.iv,
+
+                    replyToId:
+                      row.reply_to_id
+                        ? String(
+                            row.reply_to_id
+                          )
+                        : null,
 
                     time:
                       new Date(
@@ -625,6 +1066,15 @@ io.on(
 
 
         // ==================================================
+        // PRESENCE FOR NEW USER
+        // ==================================================
+
+        await sendPeerPresence(
+          socket
+        );
+
+
+        // ==================================================
         // NOTIFY OTHER USER
         // ==================================================
 
@@ -641,11 +1091,17 @@ io.on(
         ).emit(
           "presence",
           {
-            count:
-              io.sockets.adapter.rooms
-                .get(PRIVATE_ROOM_ID)
-                ?.size || 1
+            name,
+            online: true,
+            lastSeen: null
           }
+        );
+
+
+        // Also update peer's presence
+        // directly from server state.
+        await broadcastPresence(
+          name
         );
 
       }
@@ -658,11 +1114,7 @@ io.on(
 
     socket.on(
       "publicKey",
-      (data) => {
-
-        // --------------------------------------------------
-        // Must be authenticated
-        // --------------------------------------------------
+      async (data) => {
 
         if (
           !socket.data.authenticated
@@ -680,10 +1132,6 @@ io.on(
         }
 
 
-        // --------------------------------------------------
-        // Validate data
-        // --------------------------------------------------
-
         if (
           !data ||
           typeof data !== "object"
@@ -693,48 +1141,68 @@ io.on(
 
 
         if (
-          typeof data.key !== "object" ||
+          typeof data.key !==
+            "object" ||
           data.key === null
         ) {
           return;
         }
 
 
-        const keyName =
-          name.toLowerCase();
-
-
         // --------------------------------------------------
-        // Store latest public key
+        // Basic JWK validation
         // --------------------------------------------------
 
-        publicKeys.set(
-          keyName,
-          data.key
-        );
+        if (
+          data.key.kty !==
+          "EC" ||
+          data.key.crv !==
+          "P-256" ||
+          typeof data.key.x !==
+            "string" ||
+          typeof data.key.y !==
+            "string"
+        ) {
+          return;
+        }
 
 
-        // Remember exactly which socket
-        // owns this public key.
-        publicKeySockets.set(
-          keyName,
-          socket.id
-        );
+        try {
 
+          // ==================================================
+          // PERSIST PUBLIC KEY
+          // ==================================================
 
-        // --------------------------------------------------
-        // Send key to the other user
-        // --------------------------------------------------
-
-        socket.to(
-          PRIVATE_ROOM_ID
-        ).emit(
-          "peerPublicKey",
-          {
+          await savePublicKey(
             name,
-            key: data.key
-          }
-        );
+            data.key
+          );
+
+
+          // ==================================================
+          // SEND TO CURRENT PEER IF ONLINE
+          // ==================================================
+
+          socket.to(
+            PRIVATE_ROOM_ID
+          ).emit(
+            "peerPublicKey",
+            {
+              name,
+              key:
+                data.key
+            }
+          );
+
+
+        } catch (error) {
+
+          console.error(
+            "Public key save error:",
+            error.message
+          );
+
+        }
 
       }
     );
@@ -746,9 +1214,8 @@ io.on(
 
     socket.on(
       "requestPeerKey",
-      () => {
+      async () => {
 
-        // Must be authenticated.
         if (
           !socket.data.authenticated
         ) {
@@ -757,53 +1224,48 @@ io.on(
 
 
         const currentName =
-          socket.data.name
-            ?.toLowerCase();
+          socket.data.name;
 
 
-        if (!currentName) {
+        const peerName =
+          getPeerName(
+            currentName
+          );
+
+
+        if (!peerName) {
           return;
         }
 
 
-        for (
-          const [
-            peerName,
-            peerKey
-          ] of publicKeys.entries()
-        ) {
+        try {
 
-          if (
-            peerName === currentName
-          ) {
-            continue;
-          }
-
-
-          // Make sure the stored key belongs
-          // to a live authenticated peer.
-          const peerSocket =
-            getValidPeerSocket(
+          const peerKey =
+            await getStoredPublicKey(
               peerName
             );
 
 
-          if (!peerSocket) {
-            continue;
+          if (peerKey) {
+
+            socket.emit(
+              "peerPublicKey",
+              {
+                name:
+                  peerName,
+
+                key:
+                  peerKey
+              }
+            );
+
           }
 
+        } catch (error) {
 
-          socket.emit(
-            "peerPublicKey",
-            {
-              name:
-                ALLOWED_NAMES[
-                  peerName
-                ] || peerName,
-
-              key:
-                peerKey
-            }
+          console.error(
+            "Peer key request error:",
+            error.message
           );
 
         }
@@ -820,20 +1282,12 @@ io.on(
       "message",
       async (data) => {
 
-        // --------------------------------------------------
-        // Must be authenticated
-        // --------------------------------------------------
-
         if (
           !socket.data.authenticated
         ) {
           return;
         }
 
-
-        // --------------------------------------------------
-        // Validate encrypted payload
-        // --------------------------------------------------
 
         if (
           !isValidEncryptedMessage(
@@ -857,6 +1311,45 @@ io.on(
           !name
         ) {
           return;
+        }
+
+
+        // ==================================================
+        // OPTIONAL REPLY ID
+        // ==================================================
+
+        let replyToId =
+          null;
+
+
+        if (
+          data.replyToId !==
+            undefined &&
+          data.replyToId !==
+            null &&
+          String(
+            data.replyToId
+          ).trim()
+        ) {
+
+          const parsedReplyId =
+            Number(
+              data.replyToId
+            );
+
+
+          if (
+            Number.isSafeInteger(
+              parsedReplyId
+            ) &&
+            parsedReplyId > 0
+          ) {
+
+            replyToId =
+              parsedReplyId;
+
+          }
+
         }
 
 
@@ -891,7 +1384,8 @@ io.on(
                     sender,
                     message,
                     ciphertext,
-                    iv
+                    iv,
+                    reply_to_id
                   )
                 VALUES
                   (
@@ -899,7 +1393,8 @@ io.on(
                     $2,
                     NULL,
                     $3,
-                    $4
+                    $4,
+                    $5
                   )
                 RETURNING
                   id,
@@ -909,7 +1404,8 @@ io.on(
                   roomId,
                   name,
                   data.ciphertext,
-                  data.iv
+                  data.iv,
+                  replyToId
                 ]
               );
 
@@ -957,6 +1453,13 @@ io.on(
           iv:
             data.iv,
 
+          replyToId:
+            replyToId
+              ? String(
+                  replyToId
+                )
+              : null,
+
           time:
             messageTime
 
@@ -964,7 +1467,11 @@ io.on(
 
 
         // ==================================================
-        // SEND TO BOTH USERS
+        // SEND TO ONLINE USERS ONLY
+        //
+        // IMPORTANT:
+        // Offline user will receive it from history
+        // after reconnecting.
         // ==================================================
 
         io.to(
@@ -973,6 +1480,320 @@ io.on(
           "message",
           payload
         );
+
+
+        // ==================================================
+        // SENDER GETS SENT RECEIPT
+        // ==================================================
+
+        socket.emit(
+          "messageSent",
+          {
+            id:
+              savedId
+          }
+        );
+
+
+        // ==================================================
+        // IF PEER IS ONLINE:
+        // DELIVERED RECEIPT
+        // ==================================================
+
+        const peer =
+          getPeerName(
+            name
+          );
+
+
+        if (
+          peer &&
+          isUserOnline(
+            peer
+          )
+        ) {
+
+          const peerSocketId =
+            activeSockets.get(
+              peer.toLowerCase()
+            );
+
+
+          const peerSocket =
+            io.sockets.sockets.get(
+              peerSocketId
+            );
+
+
+          if (
+            peerSocket
+          ) {
+
+            peerSocket.emit(
+              "messageDelivered",
+              {
+                id:
+                  savedId
+              }
+            );
+
+          }
+
+        }
+
+      }
+    );
+
+
+    // ==================================================
+    // MESSAGE DELIVERED
+    // ==================================================
+
+    socket.on(
+      "messageDelivered",
+      async (data) => {
+
+        if (
+          !socket.data.authenticated
+        ) {
+          return;
+        }
+
+
+        if (
+          !data?.id
+        ) {
+          return;
+        }
+
+
+        const messageId =
+          Number(
+            data.id
+          );
+
+
+        if (
+          !Number.isSafeInteger(
+            messageId
+          ) ||
+          messageId <= 0
+        ) {
+          return;
+        }
+
+
+        if (!pool) {
+          return;
+        }
+
+
+        try {
+
+          const result =
+            await pool.query(
+              `
+              SELECT
+                sender,
+                room_id
+              FROM messages
+              WHERE id = $1
+                AND room_id = $2
+              LIMIT 1
+              `,
+              [
+                messageId,
+                PRIVATE_ROOM_ID
+              ]
+            );
+
+
+          if (
+            !result.rows.length
+          ) {
+            return;
+          }
+
+
+          const sender =
+            result.rows[0].sender;
+
+
+          // Only the receiver can confirm
+          // delivery of the sender's message.
+          if (
+            sender.toLowerCase() ===
+            socket.data.name.toLowerCase()
+          ) {
+            return;
+          }
+
+
+          // Notify original sender.
+          const senderSocketId =
+            activeSockets.get(
+              sender.toLowerCase()
+            );
+
+
+          const senderSocket =
+            io.sockets.sockets.get(
+              senderSocketId
+            );
+
+
+          if (
+            senderSocket &&
+            senderSocket.data.authenticated
+          ) {
+
+            senderSocket.emit(
+              "messageDelivered",
+              {
+                id:
+                  String(
+                    messageId
+                  )
+              }
+            );
+
+          }
+
+        } catch (error) {
+
+          console.error(
+            "Delivered receipt error:",
+            error.message
+          );
+
+        }
+
+      }
+    );
+
+
+    // ==================================================
+    // MESSAGE READ
+    // ==================================================
+
+    socket.on(
+      "messageRead",
+      async (data) => {
+
+        if (
+          !socket.data.authenticated
+        ) {
+          return;
+        }
+
+
+        if (
+          !data?.id
+        ) {
+          return;
+        }
+
+
+        const messageId =
+          Number(
+            data.id
+          );
+
+
+        if (
+          !Number.isSafeInteger(
+            messageId
+          ) ||
+          messageId <= 0
+        ) {
+          return;
+        }
+
+
+        if (!pool) {
+          return;
+        }
+
+
+        try {
+
+          const result =
+            await pool.query(
+              `
+              SELECT
+                sender,
+                room_id
+              FROM messages
+              WHERE id = $1
+                AND room_id = $2
+              LIMIT 1
+              `,
+              [
+                messageId,
+                PRIVATE_ROOM_ID
+              ]
+            );
+
+
+          if (
+            !result.rows.length
+          ) {
+            return;
+          }
+
+
+          const sender =
+            result.rows[0].sender;
+
+
+          // Receiver cannot mark their own
+          // message as read.
+          if (
+            sender.toLowerCase() ===
+            socket.data.name.toLowerCase()
+          ) {
+            return;
+          }
+
+
+          // Notify original sender.
+          const senderSocketId =
+            activeSockets.get(
+              sender.toLowerCase()
+            );
+
+
+          const senderSocket =
+            io.sockets.sockets.get(
+              senderSocketId
+            );
+
+
+          if (
+            senderSocket &&
+            senderSocket.data.authenticated
+          ) {
+
+            senderSocket.emit(
+              "messageRead",
+              {
+                id:
+                  String(
+                    messageId
+                  )
+              }
+            );
+
+          }
+
+        } catch (error) {
+
+          console.error(
+            "Read receipt error:",
+            error.message
+          );
+
+        }
 
       }
     );
@@ -1051,7 +1872,7 @@ io.on(
 
     socket.on(
       "disconnect",
-      () => {
+      async () => {
 
         if (
           !socket.data.authenticated
@@ -1069,7 +1890,8 @@ io.on(
 
 
         // --------------------------------------------------
-        // Remove stale public key
+        // Remove active socket only if this
+        // socket is still the current session.
         // --------------------------------------------------
 
         if (name) {
@@ -1078,25 +1900,39 @@ io.on(
             name.toLowerCase();
 
 
-          const storedSocketId =
-            publicKeySockets.get(
+          const currentSocketId =
+            activeSockets.get(
               keyName
             );
 
 
-          // Only remove the key if this
-          // socket owns the current key.
           if (
-            storedSocketId ===
+            currentSocketId ===
             socket.id
           ) {
 
-            publicKeys.delete(
+            activeSockets.delete(
               keyName
             );
 
-            publicKeySockets.delete(
+          }
+
+
+          // ------------------------------------------------
+          // SAVE LAST SEEN
+          // ------------------------------------------------
+
+          try {
+
+            await saveLastSeen(
               keyName
+            );
+
+          } catch (error) {
+
+            console.error(
+              "Last seen save error:",
+              error.message
             );
 
           }
@@ -1110,24 +1946,7 @@ io.on(
 
 
         // --------------------------------------------------
-        // Presence
-        // --------------------------------------------------
-
-        socket.to(
-          roomId
-        ).emit(
-          "presence",
-          {
-            count:
-              io.sockets.adapter.rooms
-                .get(roomId)
-                ?.size || 0
-          }
-        );
-
-
-        // --------------------------------------------------
-        // System message
+        // NOTIFY OTHER USER
         // --------------------------------------------------
 
         if (name) {
@@ -1135,8 +1954,37 @@ io.on(
           socket.to(
             roomId
           ).emit(
+            "presence",
+            {
+              name,
+
+              online:
+                false,
+
+              lastSeen:
+                new Date().toISOString()
+            }
+          );
+
+
+          socket.to(
+            roomId
+          ).emit(
             "system",
             `${name} left`
+          );
+
+        }
+
+
+        // --------------------------------------------------
+        // Update peer presence from DB/state.
+        // --------------------------------------------------
+
+        if (name) {
+
+          await broadcastPresence(
+            name
           );
 
         }
