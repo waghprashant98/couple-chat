@@ -180,34 +180,29 @@ h2 {
 
 /* Chat messages area */
 .messages {
-  position: relative;
   flex: 1;
   overflow-y: auto;
   padding: 22px 17px 12px;
-  background: #fff7fa;
-}
 
-/* Background image only */
-.messages::before {
-  content: "";
-  position: absolute;
-  inset: 0;
+  background-color: #fff7fa;
 
-  background-image: url("/assets/img1.jpg");
+  /* 50% faded background image without affecting messages */
+  background-image:
+    linear-gradient(
+      rgba(255, 247, 250, 0.5),
+      rgba(255, 247, 250, 0.5)
+    ),
+    url("/assets/img1.jpg");
+
   background-size: cover;
   background-position: center;
   background-repeat: no-repeat;
 
-  opacity: 0.5;
-
-  pointer-events: none;
-  z-index: 0;
-}
-
-/* Keep all chat content above the background */
-.messages > * {
-  position: relative;
-  z-index: 1;
+  /*
+   * Keep background fixed inside the messages element
+   * while the messages themselves scroll.
+   */
+  background-attachment: scroll;
 }
 
 .date-pill {
