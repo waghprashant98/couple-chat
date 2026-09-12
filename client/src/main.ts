@@ -73,7 +73,7 @@ interface MessageReceiptData {
         <h1>Our little corner</h1>
 
         <p class="sub">
-          A simple place for our messages.
+          A secret place for our messages.
         </p>
 
         <form (ngSubmit)="join()">

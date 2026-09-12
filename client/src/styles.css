@@ -20,6 +20,9 @@ body {
     radial-gradient(circle at 15% 15%, #ffd8e3 0, transparent 28%),
     radial-gradient(circle at 85% 80%, #e8d9ff 0, transparent 30%),
     #f8f1f4;
+
+  background-size: 120% 120%;
+  animation: ambientBackground 18s ease-in-out infinite alternate;
 }
 
 button,
@@ -27,63 +30,159 @@ input {
   font: inherit;
 }
 
+
+/* ==================================================
+   MAIN SHELL
+================================================== */
+
 .shell {
   min-height: 100%;
   display: grid;
   place-items: center;
   padding: 24px;
+
+  animation: shellReveal .8s cubic-bezier(.22, 1, .36, 1);
 }
+
+
+/* ==================================================
+   GLASS
+================================================== */
 
 .glass {
   background: rgba(255, 255, 255, .76);
   backdrop-filter: blur(22px);
+  -webkit-backdrop-filter: blur(22px);
+
   border: 1px solid rgba(255, 255, 255, .85);
-  box-shadow: 0 25px 80px rgba(77, 45, 58, .13);
+
+  box-shadow:
+    0 25px 80px rgba(77, 45, 58, .13);
+
+  transition:
+    box-shadow .5s cubic-bezier(.22, 1, .36, 1),
+    transform .5s cubic-bezier(.22, 1, .36, 1);
 }
+
+
+/* ==================================================
+   LOGIN CARD
+================================================== */
 
 .welcome {
   width: min(440px, 100%);
   padding: 48px 38px;
   border-radius: 34px;
   text-align: center;
+
+  animation:
+    cardEnter .9s cubic-bezier(.16, 1, .3, 1);
+
+  transform-origin: center;
 }
+
+.welcome:hover {
+  box-shadow:
+    0 30px 90px rgba(77, 45, 58, .17);
+}
+
+
+/* ==================================================
+   HEART LOGO
+================================================== */
 
 .logo {
   width: 76px;
   height: 76px;
   margin: 0 auto 22px;
+
   border-radius: 25px;
+
   display: grid;
   place-items: center;
+
   font-size: 32px;
   color: white;
-  background: linear-gradient(145deg, #ef7895, #c95176);
-  box-shadow: 0 14px 30px #df6c8738;
+
+  background:
+    linear-gradient(
+      145deg,
+      #ef7895,
+      #c95176
+    );
+
+  box-shadow:
+    0 14px 30px #df6c8738;
+
+  animation:
+    logoEnter .9s cubic-bezier(.16, 1, .3, 1) .08s both,
+    logoFloat 4s ease-in-out 1.1s infinite;
 }
+
+.logo::after {
+  content: "";
+  position: absolute;
+}
+
+
+/* ==================================================
+   EYEBROW
+================================================== */
 
 .eyebrow {
   font-size: 11px;
   letter-spacing: 3px;
   font-weight: 700;
   color: #b06c80;
+
+  animation:
+    textReveal .7s cubic-bezier(.22, 1, .36, 1) .22s both;
 }
+
+
+/* ==================================================
+   HEADING
+================================================== */
 
 h1 {
   font: 600 38px "Playfair Display", serif;
   margin: 6px 0 10px;
+
+  animation:
+    headingReveal .8s cubic-bezier(.22, 1, .36, 1) .3s both;
 }
+
+
+/* ==================================================
+   SUBTITLE
+================================================== */
 
 .sub {
   color: #88767f;
   margin: 0 0 28px;
+
+  animation:
+    textReveal .7s cubic-bezier(.22, 1, .36, 1) .42s both;
 }
 
-/* Login form */
+
+/* ==================================================
+   LOGIN FORM
+================================================== */
+
 .welcome form {
   display: flex;
   flex-direction: column;
   gap: 9px;
+
+  animation:
+    formReveal .8s cubic-bezier(.22, 1, .36, 1) .5s both;
 }
+
+
+/* ==================================================
+   LOGIN INPUTS
+================================================== */
 
 .welcome form input,
 .welcome form button {
@@ -96,80 +195,259 @@ h1 {
   text-align: center;
 }
 
+.welcome form input:nth-child(1) {
+  animation:
+    inputReveal .65s cubic-bezier(.22, 1, .36, 1) .56s both;
+}
+
+.welcome form input:nth-child(2) {
+  animation:
+    inputReveal .65s cubic-bezier(.22, 1, .36, 1) .64s both;
+}
+
 .welcome form button {
   min-height: 48px;
   padding: 0 19px;
+
+  animation:
+    buttonReveal .7s cubic-bezier(.22, 1, .36, 1) .72s both;
 }
+
+
+/* ==================================================
+   GENERAL INPUT
+================================================== */
 
 input {
   border: 1px solid #eadde2;
+
   background: #fff;
+
   outline: none;
+
   border-radius: 16px;
+
   padding: 14px 16px;
+
   min-width: 0;
+
   color: #342a30;
+
+  transition:
+    border-color .3s ease,
+    box-shadow .3s ease,
+    transform .3s cubic-bezier(.22, 1, .36, 1),
+    background .3s ease;
+}
+
+input:hover {
+  border-color: #e5cbd4;
 }
 
 input:focus {
   border-color: #dc7892;
-  box-shadow: 0 0 0 4px #e4779220;
+
+  background: #fff;
+
+  box-shadow:
+    0 0 0 4px #e4779220,
+    0 8px 25px rgba(220, 120, 146, .08);
+
+  transform:
+    translateY(-1px);
 }
 
 .welcome input {
   flex: 1;
 }
 
+
+/* ==================================================
+   BUTTON
+================================================== */
+
 button {
   border: 0;
+
   border-radius: 16px;
+
   background: #dc6684;
+
   color: white;
+
   padding: 0 19px;
+
   font-weight: 700;
+
   cursor: pointer;
+
+  position: relative;
+
+  overflow: hidden;
+
+  transition:
+    transform .25s cubic-bezier(.22, 1, .36, 1),
+    box-shadow .3s ease,
+    background .3s ease;
+}
+
+
+/* Animated shine */
+
+button::before {
+  content: "";
+
+  position: absolute;
+
+  top: 0;
+  left: -120%;
+
+  width: 70%;
+  height: 100%;
+
+  background:
+    linear-gradient(
+      90deg,
+      transparent,
+      rgba(255, 255, 255, .22),
+      transparent
+    );
+
+  transform: skewX(-20deg);
+
+  transition:
+    left .7s cubic-bezier(.22, 1, .36, 1);
+}
+
+button:hover::before {
+  left: 150%;
+}
+
+button:hover {
+  transform:
+    translateY(-2px);
+
+  box-shadow:
+    0 12px 28px rgba(220, 102, 132, .25);
+}
+
+button:active {
+  transform:
+    translateY(1px)
+    scale(.98);
+
+  transition-duration: .08s;
 }
 
 button:disabled {
   opacity: .45;
   cursor: default;
+  transform: none;
+  box-shadow: none;
 }
+
+
+/* ==================================================
+   LOGIN ERROR
+================================================== */
 
 .login-error {
   margin: 14px 0 0;
+
   color: #c05270;
+
   font-size: 12px;
+
   font-weight: 600;
+
+  animation:
+    errorReveal .35s ease both;
 }
+
+
+/* ==================================================
+   CHAT
+================================================== */
 
 .chat {
   width: min(560px, 100%);
   height: min(820px, calc(100vh - 40px));
   min-height: 560px;
+
   border-radius: 30px;
+
   overflow: hidden;
+
   display: flex;
   flex-direction: column;
+
+  animation:
+    chatEnter .7s cubic-bezier(.22, 1, .36, 1);
 }
+
+
+/* ==================================================
+   HEADER
+================================================== */
 
 header {
   display: flex;
   align-items: center;
+
   gap: 12px;
+
   padding: 17px 20px;
-  background: rgba(255, 255, 255, .9);
-  border-bottom: 1px solid #eee2e7;
+
+  background:
+    rgba(255, 255, 255, .9);
+
+  border-bottom:
+    1px solid #eee2e7;
+
+  animation:
+    headerReveal .55s cubic-bezier(.22, 1, .36, 1);
 }
+
+
+/* ==================================================
+   AVATAR
+================================================== */
 
 .avatar {
   width: 44px;
   height: 44px;
+
   border-radius: 15px;
+
   display: grid;
   place-items: center;
+
   color: white;
-  background: linear-gradient(145deg, #ef7895, #c95176);
+
+  background:
+    linear-gradient(
+      145deg,
+      #ef7895,
+      #c95176
+    );
+
+  animation:
+    avatarEnter .65s cubic-bezier(.22, 1, .36, 1);
+
+  transition:
+    transform .3s cubic-bezier(.22, 1, .36, 1),
+    box-shadow .3s ease;
 }
+
+.avatar:hover {
+  transform:
+    scale(1.06)
+    rotate(-2deg);
+
+  box-shadow:
+    0 8px 22px rgba(201, 81, 118, .22);
+}
+
 
 .head-text {
   flex: 1;
@@ -187,31 +465,52 @@ h2 {
 
 .head-text i {
   display: inline-block;
+
   width: 6px;
   height: 6px;
+
   background: #65bd88;
+
   border-radius: 50%;
+
   margin-right: 5px;
+
+  animation:
+    onlinePulse 2s ease-in-out infinite;
 }
 
 .head-text .offline {
   color: #a3959b;
 }
 
-/* Three-dot menu hidden */
+.head-text .offline i {
+  background: #aaa0a5;
+  animation: none;
+}
+
+
+/* ==================================================
+   THREE DOT MENU HIDDEN
+================================================== */
+
 .dots {
   display: none;
 }
 
-/* Chat messages area */
+
+/* ==================================================
+   CHAT MESSAGES
+================================================== */
+
 .messages {
   flex: 1;
+
   overflow-y: auto;
+
   padding: 22px 17px 12px;
 
   background-color: #fff7fa;
 
-  /* 35% faded background image without affecting messages */
   background-image:
     linear-gradient(
       rgba(255, 247, 250, 0.35),
@@ -220,121 +519,1019 @@ h2 {
     url("/assets/img1.jpg");
 
   background-size: cover;
+
   background-position: center;
+
   background-repeat: no-repeat;
 
   background-attachment: scroll;
+
+  scroll-behavior: smooth;
 }
+
+
+/* ==================================================
+   DATE PILL
+================================================== */
 
 .date-pill {
   width: max-content;
+
   margin: 0 auto 18px;
+
   padding: 5px 11px;
+
   border-radius: 99px;
+
   background: #f1e7eb;
+
   color: #98858d;
+
   font-size: 10px;
+
+  animation:
+    fadeUp .55s cubic-bezier(.22, 1, .36, 1);
 }
+
+
+/* ==================================================
+   MESSAGE ROW
+================================================== */
 
 .row {
   display: flex;
+
   margin: 7px 0;
+
+  animation:
+    messageIn .42s cubic-bezier(.22, 1, .36, 1);
 }
 
 .row.mine {
   justify-content: flex-end;
 }
 
+
+/* ==================================================
+   MESSAGE BUBBLE
+================================================== */
+
 .bubble {
   max-width: min(78%, 390px);
+
   padding: 9px 12px 7px;
-  border-radius: 17px 17px 17px 5px;
+
+  border-radius:
+    17px 17px 17px 5px;
+
   background: white;
-  box-shadow: 0 3px 12px #6d4d590d;
+
+  box-shadow:
+    0 3px 12px #6d4d590d;
+
   overflow-wrap: anywhere;
+
+  transition:
+    transform .25s cubic-bezier(.22, 1, .36, 1),
+    box-shadow .25s ease;
+}
+
+.bubble:hover {
+  transform:
+    translateY(-1px);
+
+  box-shadow:
+    0 7px 20px rgba(109, 77, 89, .09);
 }
 
 .mine .bubble {
-  border-radius: 17px 17px 5px 17px;
+  border-radius:
+    17px 17px 5px 17px;
+
   background: #f5c9d4;
 }
 
 .bubble small {
   display: block;
+
   color: #ad657a;
+
   font-weight: 700;
+
   font-size: 10px;
+
   margin-bottom: 3px;
 }
 
 .bubble time {
   display: block;
+
   text-align: right;
+
   color: #9b8b91;
+
   font-size: 9px;
+
   margin-top: 4px;
 }
 
 .bubble time span {
   letter-spacing: -2px;
+
   margin-left: 3px;
+
   color: #c05270;
 }
 
-/* System messages */
+
+/* ==================================================
+   SYSTEM MESSAGE
+================================================== */
+
 .system {
   width: max-content;
+
   max-width: 85%;
+
   margin: 10px auto;
+
   padding: 4px 9px;
+
   border-radius: 10px;
 
   text-align: center;
+
   color: #8a7079;
+
   font-size: 10px;
 
-  background: rgba(255, 255, 255, 0.7);
+  background:
+    rgba(255, 255, 255, .7);
+
+  animation:
+    fadeUp .4s ease both;
 }
+
+
+/* ==================================================
+   REPLY PREVIEW
+================================================== */
+
+.reply-preview {
+  display: flex;
+
+  width: 100%;
+
+  margin-bottom: 8px;
+
+  border-radius: 8px;
+
+  background:
+    rgba(255, 255, 255, .35);
+
+  overflow: hidden;
+
+  cursor: pointer;
+
+  transition:
+    background .25s ease,
+    transform .25s cubic-bezier(.22, 1, .36, 1);
+}
+
+.reply-preview:hover {
+  background:
+    rgba(255, 255, 255, .5);
+
+  transform:
+    translateX(1px);
+}
+
+.reply-line {
+  width: 3px;
+
+  background: #d96b8b;
+
+  flex: 0 0 auto;
+}
+
+.reply-content {
+  min-width: 0;
+
+  display: flex;
+
+  flex-direction: column;
+
+  padding: 6px 8px;
+
+  gap: 2px;
+}
+
+.reply-content strong {
+  font-size: 11px;
+
+  line-height: 14px;
+
+  font-weight: 700;
+}
+
+.reply-content span {
+  font-size: 11px;
+
+  line-height: 15px;
+
+  opacity: .72;
+
+  overflow: hidden;
+
+  white-space: nowrap;
+
+  text-overflow: ellipsis;
+
+  max-width: 190px;
+}
+
+
+/* ==================================================
+   REPLY COMPOSER
+================================================== */
+
+.reply-composer {
+  display: flex;
+
+  align-items: stretch;
+
+  gap: 0;
+
+  padding: 8px 12px;
+
+  background:
+    rgba(255, 247, 250, .96);
+
+  border-top:
+    1px solid rgba(190, 130, 150, .12);
+
+  animation:
+    replyBarIn .35s cubic-bezier(.22, 1, .36, 1);
+}
+
+.reply-composer-line {
+  width: 3px;
+
+  border-radius: 4px;
+
+  background: #d96b8b;
+
+  flex: 0 0 auto;
+}
+
+.reply-composer-content {
+  min-width: 0;
+
+  flex: 1;
+
+  display: flex;
+
+  flex-direction: column;
+
+  justify-content: center;
+
+  padding: 2px 10px;
+
+  gap: 2px;
+}
+
+.reply-composer-content strong {
+  font-size: 11px;
+
+  color: #b34d6d;
+}
+
+.reply-composer-content span {
+  font-size: 12px;
+
+  color: #75676d;
+
+  overflow: hidden;
+
+  white-space: nowrap;
+
+  text-overflow: ellipsis;
+}
+
+.reply-close {
+  width: 30px;
+  height: 30px;
+
+  border: 0;
+
+  background: transparent;
+
+  color: #8d7d83;
+
+  font-size: 22px;
+
+  line-height: 1;
+
+  cursor: pointer;
+
+  align-self: center;
+
+  box-shadow: none;
+}
+
+.reply-close:hover {
+  background: transparent;
+
+  box-shadow: none;
+
+  transform:
+    scale(1.08);
+}
+
+
+/* ==================================================
+   COMPOSER
+================================================== */
 
 .composer {
   display: flex;
+
   gap: 9px;
+
   padding: 13px;
-  background: rgba(255, 255, 255, .92);
-  border-top: 1px solid #eee2e7;
+
+  background:
+    rgba(255, 255, 255, .92);
+
+  border-top:
+    1px solid #eee2e7;
 }
 
 .composer input {
   flex: 1;
+
   border-radius: 18px;
+
   background: #faf7f8;
+
+  transition:
+    border-color .3s ease,
+    box-shadow .3s ease,
+    transform .25s cubic-bezier(.22, 1, .36, 1);
+}
+
+.composer input:focus {
+  transform:
+    translateY(-1px);
 }
 
 .composer button {
   width: 46px;
+
   padding: 0;
+
   border-radius: 16px;
+
   font-size: 22px;
+
+  flex: 0 0 auto;
 }
 
+
+/* ==================================================
+   MOBILE
+================================================== */
+
 @media (max-width: 600px) {
+
+  body {
+    animation-duration: 24s;
+  }
+
+
   .shell {
     padding: 0;
   }
 
+
   .chat {
     width: 100%;
+
     height: 100dvh;
+
     min-height: 0;
+
     border-radius: 0;
+
     border: 0;
+
+    animation:
+      mobileChatEnter .6s cubic-bezier(.22, 1, .36, 1);
   }
+
+
+  /* ================================================
+     MOBILE LOGIN
+  ================================================= */
 
   .welcome {
     width: 100%;
+
     min-height: 100dvh;
+
     border-radius: 0;
+
     display: grid;
+
     align-content: center;
+
+    padding:
+      40px 46px;
+
+    animation:
+      mobileWelcomeEnter .8s cubic-bezier(.16, 1, .3, 1);
   }
+
+
+  .logo {
+    width: 60px;
+    height: 60px;
+
+    border-radius: 20px;
+
+    font-size: 27px;
+
+    margin-bottom: 20px;
+  }
+
+
+  h1 {
+    font-size: 32px;
+
+    line-height: 1.15;
+  }
+
+
+  .sub {
+    font-size: 13px;
+
+    margin-bottom: 25px;
+  }
+
+
+  .welcome form {
+    gap: 8px;
+  }
+
+
+  .welcome form input {
+    min-height: 44px;
+
+    border-radius: 15px;
+
+    transition:
+      transform .25s cubic-bezier(.22, 1, .36, 1),
+      box-shadow .3s ease,
+      border-color .3s ease;
+  }
+
+
+  .welcome form button {
+    min-height: 46px;
+
+    border-radius: 15px;
+
+    margin-top: 2px;
+  }
+
+
+  /* Mobile touch feedback */
+
+  button:active {
+    transform:
+      scale(.97);
+  }
+
+
+  .messages {
+    padding:
+      18px 12px 10px;
+  }
+
+
+  .bubble {
+    max-width: 82%;
+  }
+
+
+  .composer {
+    padding:
+      10px;
+
+    gap: 7px;
+
+    padding-bottom:
+      max(10px, env(safe-area-inset-bottom));
+  }
+
+
+  .composer input {
+    min-height: 46px;
+  }
+
+
+  .composer button {
+    width: 46px;
+    height: 46px;
+
+    border-radius: 15px;
+  }
+
+}
+
+
+/* ==================================================
+   SMALL PHONES
+================================================== */
+
+@media (max-width: 380px) {
+
+  .welcome {
+    padding:
+      35px 30px;
+  }
+
+
+  h1 {
+    font-size: 29px;
+  }
+
+
+  .logo {
+    width: 56px;
+    height: 56px;
+
+    border-radius: 18px;
+
+    font-size: 25px;
+  }
+
+}
+
+
+/* ==================================================
+   KEYFRAME ANIMATIONS
+================================================== */
+
+
+/* Background breathing */
+
+@keyframes ambientBackground {
+
+  0% {
+    background-position:
+      0% 0%;
+  }
+
+  100% {
+    background-position:
+      100% 100%;
+  }
+
+}
+
+
+/* Whole page */
+
+@keyframes shellReveal {
+
+  from {
+    opacity: 0;
+  }
+
+  to {
+    opacity: 1;
+  }
+
+}
+
+
+/* Login card */
+
+@keyframes cardEnter {
+
+  from {
+    opacity: 0;
+
+    transform:
+      translateY(18px)
+      scale(.965);
+  }
+
+  to {
+    opacity: 1;
+
+    transform:
+      translateY(0)
+      scale(1);
+  }
+
+}
+
+
+/* Mobile login card */
+
+@keyframes mobileWelcomeEnter {
+
+  from {
+    opacity: 0;
+
+    transform:
+      scale(.975)
+      translateY(12px);
+  }
+
+  to {
+    opacity: 1;
+
+    transform:
+      scale(1)
+      translateY(0);
+  }
+
+}
+
+
+/* Logo */
+
+@keyframes logoEnter {
+
+  from {
+    opacity: 0;
+
+    transform:
+      translateY(15px)
+      scale(.75)
+      rotate(-5deg);
+  }
+
+  to {
+    opacity: 1;
+
+    transform:
+      translateY(0)
+      scale(1)
+      rotate(0);
+  }
+
+}
+
+
+/* Logo subtle floating */
+
+@keyframes logoFloat {
+
+  0%,
+  100% {
+    transform:
+      translateY(0);
+  }
+
+  50% {
+    transform:
+      translateY(-4px);
+  }
+
+}
+
+
+/* Text */
+
+@keyframes textReveal {
+
+  from {
+    opacity: 0;
+
+    transform:
+      translateY(8px);
+  }
+
+  to {
+    opacity: 1;
+
+    transform:
+      translateY(0);
+  }
+
+}
+
+
+/* Heading */
+
+@keyframes headingReveal {
+
+  from {
+    opacity: 0;
+
+    transform:
+      translateY(14px);
+
+    filter:
+      blur(4px);
+  }
+
+  to {
+    opacity: 1;
+
+    transform:
+      translateY(0);
+
+    filter:
+      blur(0);
+  }
+
+}
+
+
+/* Form */
+
+@keyframes formReveal {
+
+  from {
+    opacity: 0;
+
+    transform:
+      translateY(12px);
+  }
+
+  to {
+    opacity: 1;
+
+    transform:
+      translateY(0);
+  }
+
+}
+
+
+/* Inputs */
+
+@keyframes inputReveal {
+
+  from {
+    opacity: 0;
+
+    transform:
+      translateY(10px)
+      scale(.985);
+  }
+
+  to {
+    opacity: 1;
+
+    transform:
+      translateY(0)
+      scale(1);
+  }
+
+}
+
+
+/* Button */
+
+@keyframes buttonReveal {
+
+  from {
+    opacity: 0;
+
+    transform:
+      translateY(10px)
+      scale(.97);
+  }
+
+  to {
+    opacity: 1;
+
+    transform:
+      translateY(0)
+      scale(1);
+  }
+
+}
+
+
+/* Error */
+
+@keyframes errorReveal {
+
+  from {
+    opacity: 0;
+
+    transform:
+      translateY(-4px);
+  }
+
+  to {
+    opacity: 1;
+
+    transform:
+      translateY(0);
+  }
+
+}
+
+
+/* Chat */
+
+@keyframes chatEnter {
+
+  from {
+    opacity: 0;
+
+    transform:
+      translateY(10px)
+      scale(.985);
+  }
+
+  to {
+    opacity: 1;
+
+    transform:
+      translateY(0)
+      scale(1);
+  }
+
+}
+
+
+/* Mobile chat */
+
+@keyframes mobileChatEnter {
+
+  from {
+    opacity: 0;
+
+    transform:
+      translateY(8px);
+  }
+
+  to {
+    opacity: 1;
+
+    transform:
+      translateY(0);
+  }
+
+}
+
+
+/* Header */
+
+@keyframes headerReveal {
+
+  from {
+    opacity: 0;
+
+    transform:
+      translateY(-8px);
+  }
+
+  to {
+    opacity: 1;
+
+    transform:
+      translateY(0);
+  }
+
+}
+
+
+/* Avatar */
+
+@keyframes avatarEnter {
+
+  from {
+    opacity: 0;
+
+    transform:
+      scale(.7);
+  }
+
+  to {
+    opacity: 1;
+
+    transform:
+      scale(1);
+  }
+
+}
+
+
+/* Online indicator */
+
+@keyframes onlinePulse {
+
+  0%,
+  100% {
+    transform:
+      scale(1);
+
+    opacity: 1;
+  }
+
+  50% {
+    transform:
+      scale(1.25);
+
+    opacity: .65;
+  }
+
+}
+
+
+/* Messages */
+
+@keyframes messageIn {
+
+  from {
+    opacity: 0;
+
+    transform:
+      translateY(7px)
+      scale(.985);
+  }
+
+  to {
+    opacity: 1;
+
+    transform:
+      translateY(0)
+      scale(1);
+  }
+
+}
+
+
+/* Reply bar */
+
+@keyframes replyBarIn {
+
+  from {
+    opacity: 0;
+
+    transform:
+      translateY(8px);
+  }
+
+  to {
+    opacity: 1;
+
+    transform:
+      translateY(0);
+  }
+
+}
+
+
+/* Generic */
+
+@keyframes fadeUp {
+
+  from {
+    opacity: 0;
+
+    transform:
+      translateY(6px);
+  }
+
+  to {
+    opacity: 1;
+
+    transform:
+      translateY(0);
+  }
+
+}
+
+
+/* ==================================================
+   REDUCED MOTION
+================================================== */
+
+@media (prefers-reduced-motion: reduce) {
+
+  *,
+  *::before,
+  *::after {
+    animation-duration: .01ms !important;
+
+    animation-iteration-count:
+      1 !important;
+
+    scroll-behavior: auto !important;
+
+    transition-duration:
+      .01ms !important;
+  }
+
 }
