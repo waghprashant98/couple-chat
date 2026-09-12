@@ -16,6 +16,7 @@ interface ChatMessage {
   selector: 'app-root',
   standalone: true,
   imports: [CommonModule, FormsModule],
+
   template: `
   <div class="shell">
 
@@ -36,20 +37,12 @@ interface ChatMessage {
         <form (ngSubmit)="join()">
 
           <input
-            [(ngModel)]="roomId"
-            name="roomId"
-            maxlength="100"
-            placeholder="Room code"
-            autocomplete="off"
-            required
-          >
-
-          <input
             [(ngModel)]="name"
             name="name"
             maxlength="24"
             placeholder="Your name"
             autocomplete="off"
+            autofocus
             required
           >
 
@@ -84,11 +77,13 @@ interface ChatMessage {
 
         </header>
 
+
         <main class="messages" #messageBox>
 
           <div class="date-pill">
             Today
           </div>
+
 
           @for (item of messages(); track item.id || $index) {
 
@@ -116,7 +111,7 @@ interface ChatMessage {
                   </div>
 
                   <time>
-                    {{ item.time }}
+                    {{ formatTime(item.time) }}
                     <span *ngIf="item.mine">✓✓</span>
                   </time>
 
@@ -129,6 +124,7 @@ interface ChatMessage {
           }
 
         </main>
+
 
         <form
           class="composer"
@@ -165,6 +161,16 @@ interface ChatMessage {
 })
 export class AppComponent implements OnDestroy {
 
+  // ==================================================
+  // FIXED PRIVATE ROOM
+  // ==================================================
+  // Room ID user ko enter nahi karna padega.
+  // Dono users automatically isi room mein jayenge.
+  // ==================================================
+
+  private readonly roomId = 'our-private-chat-9x7m2k8p';
+
+
   joined = signal(false);
 
   online = signal(false);
@@ -172,8 +178,6 @@ export class AppComponent implements OnDestroy {
   typing = signal('');
 
   messages = signal<ChatMessage[]>([]);
-
-  roomId = '';
 
   name = '';
 
@@ -184,19 +188,17 @@ export class AppComponent implements OnDestroy {
   private typingTimer?: ReturnType<typeof setTimeout>;
 
 
-  join() {
+  // ==================================================
+  // JOIN CHAT
+  // ==================================================
 
-    this.roomId = this.roomId
-      .trim()
-      .toLowerCase()
-      .replace(/[^a-z0-9_-]/g, '')
-      .slice(0, 100);
+  join() {
 
     this.name = this.name
       .trim()
       .slice(0, 24);
 
-    if (!this.roomId || !this.name) {
+    if (!this.name) {
       return;
     }
 
@@ -205,12 +207,14 @@ export class AppComponent implements OnDestroy {
     this.socket = io();
 
 
-    // Connected
+    // ==================================================
+    // CONNECT
+    // ==================================================
+
     this.socket.on('connect', () => {
 
       this.online.set(true);
 
-      // IMPORTANT:
       // Server expects roomId + name
       this.socket?.emit('join', {
         roomId: this.roomId,
@@ -220,7 +224,10 @@ export class AppComponent implements OnDestroy {
     });
 
 
-    // Connection closed
+    // ==================================================
+    // DISCONNECT
+    // ==================================================
+
     this.socket.on('disconnect', () => {
 
       this.online.set(false);
@@ -228,7 +235,10 @@ export class AppComponent implements OnDestroy {
     });
 
 
-    // Database history
+    // ==================================================
+    // DATABASE CHAT HISTORY
+    // ==================================================
+
     this.socket.on(
       'history',
       (history: ChatMessage[]) => {
@@ -246,7 +256,10 @@ export class AppComponent implements OnDestroy {
     );
 
 
-    // New message
+    // ==================================================
+    // NEW MESSAGE
+    // ==================================================
+
     this.socket.on(
       'message',
       (message: ChatMessage) => {
@@ -265,7 +278,10 @@ export class AppComponent implements OnDestroy {
     );
 
 
-    // System message
+    // ==================================================
+    // SYSTEM MESSAGE
+    // ==================================================
+
     this.socket.on(
       'system',
       (text: string) => {
@@ -285,7 +301,10 @@ export class AppComponent implements OnDestroy {
     );
 
 
-    // Typing
+    // ==================================================
+    // TYPING
+    // ==================================================
+
     this.socket.on(
       'typing',
       (who: string) => {
@@ -309,6 +328,10 @@ export class AppComponent implements OnDestroy {
     );
 
 
+    // ==================================================
+    // STOP TYPING
+    // ==================================================
+
     this.socket.on(
       'stopTyping',
       () => {
@@ -319,12 +342,18 @@ export class AppComponent implements OnDestroy {
     );
 
 
-    // Join error
+    // ==================================================
+    // JOIN ERROR
+    // ==================================================
+
     this.socket.on(
       'joinError',
       (error: string) => {
 
-        console.error('Join error:', error);
+        console.error(
+          'Join error:',
+          error
+        );
 
         this.joined.set(false);
 
@@ -333,6 +362,10 @@ export class AppComponent implements OnDestroy {
 
   }
 
+
+  // ==================================================
+  // SEND MESSAGE
+  // ==================================================
 
   send() {
 
@@ -360,6 +393,10 @@ export class AppComponent implements OnDestroy {
   }
 
 
+  // ==================================================
+  // TYPING HANDLER
+  // ==================================================
+
   handleTyping() {
 
     if (
@@ -369,19 +406,57 @@ export class AppComponent implements OnDestroy {
       return;
     }
 
-    this.socket.emit('typing');
+    this.socket.emit(
+      'typing'
+    );
 
-    clearTimeout(this.typingTimer);
+    clearTimeout(
+      this.typingTimer
+    );
 
     this.typingTimer = setTimeout(
       () => {
-        this.socket?.emit('stopTyping');
+        this.socket?.emit(
+          'stopTyping'
+        );
       },
       900
     );
 
   }
 
+
+  // ==================================================
+  // WHATSAPP STYLE TIME
+  // ==================================================
+
+  formatTime(time: string): string {
+
+    if (!time) {
+      return '';
+    }
+
+    const date = new Date(time);
+
+    if (isNaN(date.getTime())) {
+      return time;
+    }
+
+    return date.toLocaleTimeString(
+      'en-IN',
+      {
+        hour: 'numeric',
+        minute: '2-digit',
+        hour12: true
+      }
+    );
+
+  }
+
+
+  // ==================================================
+  // AUTO SCROLL
+  // ==================================================
 
   private scrollSoon() {
 
@@ -393,14 +468,20 @@ export class AppComponent implements OnDestroy {
         ) as HTMLElement | null;
 
       if (el) {
+
         el.scrollTop =
           el.scrollHeight;
+
       }
 
     });
 
   }
 
+
+  // ==================================================
+  // CLEANUP
+  // ==================================================
 
   ngOnDestroy() {
 
@@ -414,6 +495,10 @@ export class AppComponent implements OnDestroy {
 
 }
 
+
+// ==================================================
+// BOOTSTRAP
+// ==================================================
 
 bootstrapApplication(
   AppComponent
