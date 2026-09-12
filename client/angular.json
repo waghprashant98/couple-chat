@@ -16,13 +16,17 @@
             "browser": "src/main.ts",
             "polyfills": ["zone.js"],
             "tsConfig": "tsconfig.app.json",
-            "assets": [],
+            "assets": [
+              "src/assets"
+            ],
             "styles": ["src/styles.css"]
           }
         },
         "serve": {
           "builder": "@angular-devkit/build-angular:dev-server",
-          "options": { "buildTarget": "couple-chat:build" }
+          "options": {
+            "buildTarget": "couple-chat:build"
+          }
         }
       }
     }
