@@ -80,7 +80,18 @@ h1 {
 
 .welcome form {
   display: flex;
+  flex-direction: column;
   gap: 9px;
+}
+
+.welcome form input,
+.welcome form button {
+  width: 100%;
+  min-height: 52px;
+}
+
+.welcome form button {
+  padding: 0 19px;
 }
 
 input {
