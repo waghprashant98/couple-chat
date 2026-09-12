@@ -64,7 +64,7 @@ interface ChatMessage {
 
           <div class="head-text">
 
-            <h2>My Love</h2>
+            <h2>Our Chat</h2>
 
             <span [class.offline]="!online()">
               <i></i>
@@ -73,15 +73,19 @@ interface ChatMessage {
 
           </div>
 
+          <div class="dots">•••</div>
+
         </header>
 
 
         <main class="messages" #messageBox>
 
-          @for (
-            item of messages();
-            track item.id || $index
-          ) {
+          <div class="date-pill">
+            Today
+          </div>
+
+
+          @for (item of messages(); track item.id || $index) {
 
             @if (item.name === '__system') {
 
@@ -90,15 +94,6 @@ interface ChatMessage {
               </div>
 
             } @else {
-
-              @if (shouldShowDate(item, $index)) {
-
-                <div class="date-pill">
-                  {{ formatDateLabel(item.time) }}
-                </div>
-
-              }
-
 
               <div
                 class="row"
@@ -117,10 +112,7 @@ interface ChatMessage {
 
                   <time>
                     {{ formatTime(item.time) }}
-
-                    <span *ngIf="item.mine">
-                      ✓✓
-                    </span>
+                    <span *ngIf="item.mine">✓✓</span>
                   </time>
 
                 </div>
@@ -172,9 +164,11 @@ export class AppComponent implements OnDestroy {
   // ==================================================
   // FIXED PRIVATE ROOM
   // ==================================================
+  // Room ID user ko enter nahi karna padega.
+  // Dono users automatically isi room mein jayenge.
+  // ==================================================
 
-  private readonly roomId =
-    'our-private-chat-9x7m2k8p';
+  private readonly roomId = 'our-private-chat-9x7m2k8p';
 
 
   joined = signal(false);
@@ -221,6 +215,7 @@ export class AppComponent implements OnDestroy {
 
       this.online.set(true);
 
+      // Server expects roomId + name
       this.socket?.emit('join', {
         roomId: this.roomId,
         name: this.name
@@ -251,8 +246,7 @@ export class AppComponent implements OnDestroy {
         this.messages.set(
           history.map(message => ({
             ...message,
-            mine:
-              message.name === this.name
+            mine: message.name === this.name
           }))
         );
 
@@ -274,8 +268,7 @@ export class AppComponent implements OnDestroy {
           ...list,
           {
             ...message,
-            mine:
-              message.name === this.name
+            mine: message.name === this.name
           }
         ]);
 
@@ -324,15 +317,12 @@ export class AppComponent implements OnDestroy {
           `${who} is typing…`
         );
 
-        clearTimeout(
-          this.typingTimer
-        );
+        clearTimeout(this.typingTimer);
 
-        this.typingTimer =
-          setTimeout(
-            () => this.typing.set(''),
-            1400
-          );
+        this.typingTimer = setTimeout(
+          () => this.typing.set(''),
+          1400
+        );
 
       }
     );
@@ -379,8 +369,7 @@ export class AppComponent implements OnDestroy {
 
   send() {
 
-    const text =
-      this.draft.trim();
+    const text = this.draft.trim();
 
     if (
       !text ||
@@ -425,15 +414,14 @@ export class AppComponent implements OnDestroy {
       this.typingTimer
     );
 
-    this.typingTimer =
-      setTimeout(
-        () => {
-          this.socket?.emit(
-            'stopTyping'
-          );
-        },
-        900
-      );
+    this.typingTimer = setTimeout(
+      () => {
+        this.socket?.emit(
+          'stopTyping'
+        );
+      },
+      900
+    );
 
   }
 
@@ -442,22 +430,15 @@ export class AppComponent implements OnDestroy {
   // WHATSAPP STYLE TIME
   // ==================================================
 
-  formatTime(
-    time: string
-  ): string {
+  formatTime(time: string): string {
 
     if (!time) {
       return '';
     }
 
-    const date =
-      new Date(time);
+    const date = new Date(time);
 
-    if (
-      isNaN(
-        date.getTime()
-      )
-    ) {
+    if (isNaN(date.getTime())) {
       return time;
     }
 
@@ -467,157 +448,6 @@ export class AppComponent implements OnDestroy {
         hour: 'numeric',
         minute: '2-digit',
         hour12: true
-      }
-    );
-
-  }
-
-
-  // ==================================================
-  // DATE SEPARATOR
-  // ==================================================
-
-  shouldShowDate(
-    item: ChatMessage,
-    index: number
-  ): boolean {
-
-    if (!item.time) {
-      return false;
-    }
-
-    // First message
-    if (index === 0) {
-      return true;
-    }
-
-    // Find previous actual chat message
-    // and compare calendar dates.
-    for (
-      let i = index - 1;
-      i >= 0;
-      i--
-    ) {
-
-      const previous =
-        this.messages()[i];
-
-      if (
-        previous.name === '__system' ||
-        !previous.time
-      ) {
-        continue;
-      }
-
-      return !this.isSameDay(
-        previous.time,
-        item.time
-      );
-
-    }
-
-    return true;
-
-  }
-
-
-  // ==================================================
-  // CHECK SAME DAY
-  // ==================================================
-
-  private isSameDay(
-    firstTime: string,
-    secondTime: string
-  ): boolean {
-
-    const first =
-      new Date(firstTime);
-
-    const second =
-      new Date(secondTime);
-
-    if (
-      isNaN(first.getTime()) ||
-      isNaN(second.getTime())
-    ) {
-      return false;
-    }
-
-    return (
-      first.getFullYear() ===
-        second.getFullYear() &&
-
-      first.getMonth() ===
-        second.getMonth() &&
-
-      first.getDate() ===
-        second.getDate()
-    );
-
-  }
-
-
-  // ==================================================
-  // WHATSAPP STYLE DATE LABEL
-  // ==================================================
-
-  formatDateLabel(
-    time: string
-  ): string {
-
-    const date =
-      new Date(time);
-
-    if (
-      isNaN(
-        date.getTime()
-      )
-    ) {
-      return '';
-    }
-
-
-    const now =
-      new Date();
-
-
-    // Today
-    if (
-      this.isSameDay(
-        time,
-        now.toISOString()
-      )
-    ) {
-      return 'Today';
-    }
-
-
-    // Yesterday
-    const yesterday =
-      new Date(now);
-
-    yesterday.setDate(
-      yesterday.getDate() - 1
-    );
-
-
-    if (
-      this.isSameDay(
-        time,
-        yesterday.toISOString()
-      )
-    ) {
-      return 'Yesterday';
-    }
-
-
-    // Older dates
-    return date.toLocaleDateString(
-      'en-IN',
-      {
-        day: 'numeric',
-        month: 'short',
-        year: 'numeric'
       }
     );
 
