@@ -39,7 +39,9 @@ const pool = process.env.DATABASE_URL
 
 async function initDb() {
   if (!pool) {
-    console.warn("DATABASE_URL is not set. Chat history will not be saved.");
+    console.warn(
+      "DATABASE_URL is not set. Chat history will not be saved."
+    );
     return;
   }
 
@@ -90,12 +92,21 @@ function cleanName(value) {
 // =========================
 
 io.on("connection", (socket) => {
+
+  // =========================
+  // Join Room
+  // =========================
+
   socket.on("join", async (data) => {
+
     const roomId = cleanRoom(data?.roomId);
     const name = cleanName(data?.name);
 
     if (!roomId) {
-      socket.emit("joinError", "Please enter a room code.");
+      socket.emit(
+        "joinError",
+        "Please enter a room code."
+      );
       return;
     }
 
@@ -104,9 +115,13 @@ io.on("connection", (socket) => {
 
     socket.join(roomId);
 
-    // Load previous messages
+    // =========================
+    // Load Chat History
+    // =========================
+
     if (pool) {
       try {
+
         const result = await pool.query(
           `
           SELECT id, sender, message, created_at
@@ -124,33 +139,49 @@ io.on("connection", (socket) => {
             id: String(row.id),
             name: row.sender,
             text: row.message,
-            time: new Date(row.created_at).toLocaleTimeString([], {
-              hour: "2-digit",
-              minute: "2-digit"
-            })
+
+            // Send ISO timestamp.
+            // Browser will convert it to local time.
+            time: new Date(row.created_at).toISOString()
           }))
         );
+
       } catch (error) {
-        console.error("History error:", error.message);
+
+        console.error(
+          "History error:",
+          error.message
+        );
+
       }
     }
+
+    // =========================
+    // Notify Other User
+    // =========================
 
     socket.to(roomId).emit(
       "system",
       `${name} joined the room ❤️`
     );
 
-    socket.to(roomId).emit("presence", {
-      count:
-        io.sockets.adapter.rooms.get(roomId)?.size || 1
-    });
+    socket.to(roomId).emit(
+      "presence",
+      {
+        count:
+          io.sockets.adapter.rooms.get(roomId)?.size || 1
+      }
+    );
+
   });
 
+
   // =========================
-  // Message
+  // Send Message
   // =========================
 
   socket.on("message", async (text) => {
+
     const roomId = socket.data.roomId;
     const name = socket.data.name;
 
@@ -158,16 +189,31 @@ io.on("connection", (socket) => {
       .trim()
       .slice(0, 2000);
 
-    if (!roomId || !name || !cleanText) {
+    if (
+      !roomId ||
+      !name ||
+      !cleanText
+    ) {
       return;
     }
 
     let savedId =
-      `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+      `${Date.now()}-${Math.random()
+        .toString(16)
+        .slice(2)}`;
 
-    // Save to PostgreSQL
+    let messageTime =
+      new Date().toISOString();
+
+
+    // =========================
+    // Save Message to Database
+    // =========================
+
     if (pool) {
+
       try {
+
         const result = await pool.query(
           `
           INSERT INTO messages
@@ -176,104 +222,183 @@ io.on("connection", (socket) => {
             ($1, $2, $3)
           RETURNING id, created_at
           `,
-          [roomId, name, cleanText]
+          [
+            roomId,
+            name,
+            cleanText
+          ]
         );
 
-        savedId = String(result.rows[0].id);
+        savedId =
+          String(result.rows[0].id);
+
+        messageTime =
+          new Date(
+            result.rows[0].created_at
+          ).toISOString();
+
       } catch (error) {
-        console.error("Save error:", error.message);
+
+        console.error(
+          "Save error:",
+          error.message
+        );
+
       }
+
     }
+
+
+    // =========================
+    // Send Message to Room
+    // =========================
 
     const payload = {
       id: savedId,
       name,
       text: cleanText,
-      time: new Date().toLocaleTimeString([], {
-        hour: "2-digit",
-        minute: "2-digit"
-      })
+
+      // ISO timestamp.
+      // Frontend converts this to local time.
+      time: messageTime
     };
 
-    io.to(roomId).emit("message", payload);
+    io.to(roomId).emit(
+      "message",
+      payload
+    );
+
   });
+
 
   // =========================
   // Typing
   // =========================
 
   socket.on("typing", () => {
-    const roomId = socket.data.roomId;
+
+    const roomId =
+      socket.data.roomId;
 
     if (roomId) {
+
       socket.to(roomId).emit(
         "typing",
         socket.data.name
       );
+
     }
+
   });
+
+
+  // =========================
+  // Stop Typing
+  // =========================
 
   socket.on("stopTyping", () => {
-    const roomId = socket.data.roomId;
+
+    const roomId =
+      socket.data.roomId;
 
     if (roomId) {
-      socket.to(roomId).emit("stopTyping");
+
+      socket.to(roomId).emit(
+        "stopTyping"
+      );
+
     }
+
   });
+
 
   // =========================
   // Disconnect
   // =========================
 
   socket.on("disconnect", () => {
-    const roomId = socket.data.roomId;
-    const name = socket.data.name;
 
-    if (!roomId) return;
+    const roomId =
+      socket.data.roomId;
 
-    socket.to(roomId).emit("presence", {
-      count:
-        io.sockets.adapter.rooms.get(roomId)?.size || 0
-    });
+    const name =
+      socket.data.name;
+
+    if (!roomId) {
+      return;
+    }
+
+    socket.to(roomId).emit(
+      "presence",
+      {
+        count:
+          io.sockets.adapter.rooms.get(roomId)?.size || 0
+      }
+    );
 
     if (name) {
+
       socket.to(roomId).emit(
         "system",
         `${name} left`
       );
+
     }
+
   });
+
 });
 
+
 // =========================
-// Angular fallback
+// Angular Fallback
 // =========================
 
 app.get("*", (_, res) => {
+
   res.sendFile(
-    path.join(clientDist, "index.html")
+    path.join(
+      clientDist,
+      "index.html"
+    )
   );
+
 });
 
+
 // =========================
-// Start server
+// Start Server
 // =========================
 
 initDb()
   .then(() => {
-    server.listen(PORT, () => {
-      console.log(`Running on port ${PORT}`);
-    });
+
+    server.listen(
+      PORT,
+      () => {
+        console.log(
+          `Running on port ${PORT}`
+        );
+      }
+    );
+
   })
   .catch((error) => {
+
     console.error(
       "Database initialization failed:",
       error.message
     );
 
-    server.listen(PORT, () => {
-      console.log(
-        `Running on port ${PORT} without database`
-      );
-    });
+    server.listen(
+      PORT,
+      () => {
+
+        console.log(
+          `Running on port ${PORT} without database`
+        );
+
+      }
+    );
+
   });
