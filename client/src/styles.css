@@ -186,11 +186,11 @@ h2 {
 
   background-color: #fff7fa;
 
-  /* 50% faded background image without affecting messages */
+  /* 35% faded background image without affecting messages */
   background-image:
     linear-gradient(
-      rgba(255, 247, 250, 0.5),
-      rgba(255, 247, 250, 0.5)
+      rgba(255, 247, 250, 0.35),
+      rgba(255, 247, 250, 0.35)
     ),
     url("/assets/img1.jpg");
 
@@ -198,10 +198,6 @@ h2 {
   background-position: center;
   background-repeat: no-repeat;
 
-  /*
-   * Keep background fixed inside the messages element
-   * while the messages themselves scroll.
-   */
   background-attachment: scroll;
 }
 
@@ -262,10 +258,17 @@ h2 {
 
 /* System messages */
 .system {
+  width: max-content;
+  max-width: 85%;
+  margin: 10px auto;
+  padding: 4px 9px;
+  border-radius: 10px;
+
   text-align: center;
-  color: #8f7b83;
+  color: #8a7079;
   font-size: 10px;
-  margin: 10px;
+
+  background: rgba(255, 255, 255, 0.7);
 }
 
 .composer {
