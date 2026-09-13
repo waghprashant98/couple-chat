@@ -32,6 +32,10 @@ interface ChatMessage {
 
   // Message delivery state
   status?: 'sent' | 'delivered' | 'read';
+
+  // Persisted receipt timestamps
+  deliveredAt?: string | null;
+  readAt?: string | null;
 }
 
 interface PublicKeyData {
@@ -52,6 +56,8 @@ interface MessageReceiptData {
 interface KeyBundleData {
   ciphertext: string;
   iv: string;
+  deliveredAt?: string | null;
+  readAt?: string | null;
 }
 
 
@@ -1135,7 +1141,10 @@ export class AppComponent implements OnDestroy {
                 return {
                   ...message,
                   status:
-                    'delivered'
+                    'delivered',
+                  deliveredAt:
+                    message.deliveredAt ||
+                    new Date().toISOString()
                 };
 
               }
@@ -1182,7 +1191,12 @@ export class AppComponent implements OnDestroy {
                 return {
                   ...message,
                   status:
-                    'read'
+                    'read',
+                  deliveredAt:
+                    message.deliveredAt ||
+                    new Date().toISOString(),
+                  readAt:
+                    new Date().toISOString()
                 };
 
               }
@@ -1444,7 +1458,17 @@ export class AppComponent implements OnDestroy {
         status:
           mine
             ? 'sent'
-            : 'delivered'
+            : 'delivered',
+
+        deliveredAt:
+          mine
+            ? null
+            : new Date().toISOString(),
+
+        readAt:
+          mine
+            ? null
+            : new Date().toISOString()
 
       };
 
@@ -1574,9 +1598,21 @@ export class AppComponent implements OnDestroy {
           replyTo:
             null,
 
+          deliveredAt:
+            message.deliveredAt || null,
+
+          readAt:
+            message.readAt || null,
+
           status:
             mine
-              ? 'sent'
+              ? (
+                message.readAt
+                  ? 'read'
+                  : message.deliveredAt
+                    ? 'delivered'
+                    : 'sent'
+              )
               : 'read'
 
         });

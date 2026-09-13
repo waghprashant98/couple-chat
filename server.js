@@ -70,19 +70,107 @@ const CHAT_PASSCODE =
 
 
 // ==================================================
+// JOIN RATE LIMIT
+//
+// Maximum 3 failed login attempts per IP
+// within 10 minutes.
+// ==================================================
+
+const MAX_FAILED_JOIN_ATTEMPTS = 3;
+const JOIN_RATE_LIMIT_WINDOW_MS = 10 * 60 * 1000;
+
+const failedJoinAttempts =
+  new Map();
+
+
+function getClientIp(socket) {
+
+  const forwardedFor =
+    socket.handshake.headers["x-forwarded-for"];
+
+  if (
+    typeof forwardedFor === "string" &&
+    forwardedFor.length
+  ) {
+    return forwardedFor
+      .split(",")[0]
+      .trim();
+  }
+
+  return socket.handshake.address || "unknown";
+}
+
+
+function isJoinRateLimited(ip) {
+
+  const entry =
+    failedJoinAttempts.get(ip);
+
+  if (!entry) {
+    return false;
+  }
+
+  if (
+    Date.now() - entry.firstAttemptAt >=
+    JOIN_RATE_LIMIT_WINDOW_MS
+  ) {
+    failedJoinAttempts.delete(ip);
+    return false;
+  }
+
+  return entry.attempts >= MAX_FAILED_JOIN_ATTEMPTS;
+}
+
+
+function recordFailedJoinAttempt(ip) {
+
+  const now = Date.now();
+
+  const entry =
+    failedJoinAttempts.get(ip);
+
+  if (
+    !entry ||
+    now - entry.firstAttemptAt >=
+      JOIN_RATE_LIMIT_WINDOW_MS
+  ) {
+
+    failedJoinAttempts.set(
+      ip,
+      {
+        attempts: 1,
+        firstAttemptAt: now
+      }
+    );
+
+    return;
+  }
+
+  entry.attempts += 1;
+}
+
+
+function clearFailedJoinAttempts(ip) {
+
+  failedJoinAttempts.delete(ip);
+
+}
+
+
+// ==================================================
 // PostgreSQL / Supabase
 // ==================================================
 
 const pool =
   process.env.DATABASE_URL
     ? new Pool({
-        connectionString:
-          process.env.DATABASE_URL,
+      connectionString:
+        process.env.DATABASE_URL,
 
-        ssl: {
-          rejectUnauthorized: false
-        }
-      })
+      ssl: {
+        rejectUnauthorized: false
+      }
+    })
     : null;
 
 
@@ -124,6 +212,8 @@ async function initDb() {
       ciphertext TEXT,
       iv TEXT,
       reply_to_id BIGINT,
+      delivered_at TIMESTAMPTZ,
+      read_at TIMESTAMPTZ,
       created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
     );
 
@@ -135,6 +225,12 @@ async function initDb() {
 
     ALTER TABLE messages
       ADD COLUMN IF NOT EXISTS reply_to_id BIGINT;
+
+    ALTER TABLE messages
+      ADD COLUMN IF NOT EXISTS delivered_at TIMESTAMPTZ;
+
+    ALTER TABLE messages
+      ADD COLUMN IF NOT EXISTS read_at TIMESTAMPTZ;
 
     ALTER TABLE messages
       ALTER COLUMN message DROP NOT NULL;
@@ -615,7 +711,7 @@ function isUserOnline(
     socket &&
     socket.data.authenticated &&
     socket.data.roomId ===
-      PRIVATE_ROOM_ID
+    PRIVATE_ROOM_ID
   );
 
 }
@@ -807,6 +903,27 @@ io.on(
         }
 
 
+        const clientIp =
+          getClientIp(socket);
+
+
+        // --------------------------------------------------
+        // RATE LIMIT
+        // --------------------------------------------------
+
+        if (
+          isJoinRateLimited(clientIp)
+        ) {
+
+          socket.emit(
+            "joinError",
+            "Too many failed attempts. Try again in 10 minutes."
+          );
+
+          return;
+        }
+
+
         // --------------------------------------------------
         // SECURITY CONFIG
         // --------------------------------------------------
@@ -853,6 +970,10 @@ io.on(
           )
         ) {
 
+          recordFailedJoinAttempt(
+            clientIp
+          );
+
           socket.emit(
             "joinError",
             "Incorrect passcode."
@@ -860,6 +981,13 @@ io.on(
 
           return;
         }
+
+
+        // Successful passcode clears
+        // previous failed attempts.
+        clearFailedJoinAttempts(
+          clientIp
+        );
 
 
         // --------------------------------------------------
@@ -1096,24 +1224,38 @@ io.on(
             const result =
               await pool.query(
                 `
-                SELECT
-                  id,
-                  sender,
-                  message,
-                  ciphertext,
-                  iv,
-                  reply_to_id,
-                  created_at
-                FROM messages
-                WHERE room_id = $1
-                ORDER BY created_at ASC
-                LIMIT 200
-                `,
+    SELECT
+      id,
+      sender,
+      message,
+      ciphertext,
+      iv,
+      reply_to_id,
+      delivered_at,
+      read_at,
+      created_at
+    FROM (
+      SELECT
+        id,
+        sender,
+        message,
+        ciphertext,
+        iv,
+        reply_to_id,
+        delivered_at,
+        read_at,
+        created_at
+      FROM messages
+      WHERE room_id = $1
+      ORDER BY created_at DESC
+      LIMIT 200
+    ) AS latest_messages
+    ORDER BY created_at ASC
+    `,
                 [
                   PRIVATE_ROOM_ID
                 ]
               );
-
 
             const encryptedHistory =
               result.rows
@@ -1141,8 +1283,22 @@ io.on(
                     replyToId:
                       row.reply_to_id
                         ? String(
-                            row.reply_to_id
-                          )
+                          row.reply_to_id
+                        )
+                        : null,
+
+                    deliveredAt:
+                      row.delivered_at
+                        ? new Date(
+                          row.delivered_at
+                        ).toISOString()
+                        : null,
+
+                    readAt:
+                      row.read_at
+                        ? new Date(
+                          row.read_at
+                        ).toISOString()
                         : null,
 
                     time:
@@ -1248,7 +1404,7 @@ io.on(
 
         if (
           typeof data.key !==
-            "object" ||
+          "object" ||
           data.key === null
         ) {
           return;
@@ -1265,9 +1421,9 @@ io.on(
           data.key.crv !==
           "P-256" ||
           typeof data.key.x !==
-            "string" ||
+          "string" ||
           typeof data.key.y !==
-            "string"
+          "string"
         ) {
           return;
         }
@@ -1500,15 +1656,15 @@ io.on(
           const bundle =
             saved
               ? {
-                  ciphertext:
-                    data.ciphertext,
+                ciphertext:
+                  data.ciphertext,
 
-                  iv:
-                    data.iv
-                }
+                iv:
+                  data.iv
+              }
               : await getKeyBundle(
-                  PRIVATE_ROOM_ID
-                );
+                PRIVATE_ROOM_ID
+              );
 
           console.log(
             "Key bundle save result:",
@@ -1608,9 +1764,9 @@ io.on(
 
         if (
           data.replyToId !==
-            undefined &&
+          undefined &&
           data.replyToId !==
-            null &&
+          null &&
           String(
             data.replyToId
           ).trim()
@@ -1669,7 +1825,9 @@ io.on(
                     message,
                     ciphertext,
                     iv,
-                    reply_to_id
+                    reply_to_id,
+                    delivered_at,
+                    read_at
                   )
                 VALUES
                   (
@@ -1678,7 +1836,9 @@ io.on(
                     NULL,
                     $3,
                     $4,
-                    $5
+                    $5,
+                    NULL,
+                    NULL
                   )
                 RETURNING
                   id,
@@ -1740,8 +1900,8 @@ io.on(
           replyToId:
             replyToId
               ? String(
-                  replyToId
-                )
+                replyToId
+              )
               : null,
 
           time:
@@ -1812,6 +1972,30 @@ io.on(
           if (
             peerSocket
           ) {
+
+            if (pool) {
+              try {
+                await pool.query(
+                  `
+                  UPDATE messages
+                  SET delivered_at = COALESCE(delivered_at, NOW())
+                  WHERE id = $1
+                    AND room_id = $2
+                    AND sender = $3
+                  `,
+                  [
+                    Number(savedId),
+                    PRIVATE_ROOM_ID,
+                    name
+                  ]
+                );
+              } catch (error) {
+                console.error(
+                  "Delivered timestamp save error:",
+                  error.message
+                );
+              }
+            }
 
             peerSocket.emit(
               "messageDelivered",
@@ -1911,6 +2095,42 @@ io.on(
           ) {
             return;
           }
+
+
+          // Persist delivery timestamp.
+          await pool.query(
+            `
+            UPDATE messages
+            SET delivered_at = COALESCE(delivered_at, NOW())
+            WHERE id = $1
+              AND room_id = $2
+              AND sender = $3
+            `,
+            [
+              messageId,
+              PRIVATE_ROOM_ID,
+              sender
+            ]
+          );
+
+
+          // Persist both delivery and read timestamps.
+          await pool.query(
+            `
+            UPDATE messages
+            SET
+              delivered_at = COALESCE(delivered_at, NOW()),
+              read_at = COALESCE(read_at, NOW())
+            WHERE id = $1
+              AND room_id = $2
+              AND sender = $3
+            `,
+            [
+              messageId,
+              PRIVATE_ROOM_ID,
+              sender
+            ]
+          );
 
 
           // Notify original sender.
