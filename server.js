@@ -157,6 +157,14 @@ async function initDb() {
       username VARCHAR(24) PRIMARY KEY,
       last_seen TIMESTAMPTZ
     );
+
+    CREATE TABLE IF NOT EXISTS chat_key_bundle (
+      room_id VARCHAR(100) PRIMARY KEY,
+      ciphertext TEXT NOT NULL,
+      iv TEXT NOT NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
   `);
 
 
@@ -422,6 +430,73 @@ async function savePublicKey(
     ]
   );
 
+}
+
+
+// ==================================================
+// KEY BUNDLE HELPERS
+// ==================================================
+
+async function getKeyBundle(roomId) {
+
+  if (!pool) {
+    return null;
+  }
+
+  const result = await pool.query(
+    `
+    SELECT
+      ciphertext,
+      iv
+    FROM chat_key_bundle
+    WHERE room_id = $1
+    LIMIT 1
+    `,
+    [roomId]
+  );
+
+  if (!result.rows.length) {
+    return null;
+  }
+
+  return {
+    ciphertext: result.rows[0].ciphertext,
+    iv: result.rows[0].iv
+  };
+}
+
+
+async function saveKeyBundle(roomId, bundle) {
+
+  if (!pool) {
+    return false;
+  }
+
+  const result = await pool.query(
+    `
+    INSERT INTO chat_key_bundle
+      (
+        room_id,
+        ciphertext,
+        iv
+      )
+    VALUES
+      (
+        $1,
+        $2,
+        $3
+      )
+    ON CONFLICT (room_id)
+    DO NOTHING
+    `,
+    [
+      roomId,
+      bundle.ciphertext,
+      bundle.iv
+    ]
+  );
+
+  return result.rowCount > 0;
 }
 
 
@@ -980,6 +1055,37 @@ io.on(
 
 
         // ==================================================
+        // SEND SHARED KEY BUNDLE
+        // ==================================================
+
+        try {
+
+          const keyBundle =
+            await getKeyBundle(
+              PRIVATE_ROOM_ID
+            );
+
+          socket.emit(
+            "keyBundle",
+            keyBundle
+          );
+
+        } catch (error) {
+
+          console.error(
+            "Key bundle load error:",
+            error.message
+          );
+
+          socket.emit(
+            "keyBundle",
+            null
+          );
+
+        }
+
+
+        // ==================================================
         // LOAD CHAT HISTORY
         // ==================================================
 
@@ -1266,6 +1372,161 @@ io.on(
           console.error(
             "Peer key request error:",
             error.message
+          );
+
+        }
+
+      }
+    );
+
+
+    // ==================================================
+    // REQUEST SHARED KEY BUNDLE
+    // ==================================================
+
+    socket.on(
+      "requestKeyBundle",
+      async () => {
+
+        if (
+          !socket.data.authenticated
+        ) {
+          return;
+        }
+
+        try {
+
+          const keyBundle =
+            await getKeyBundle(
+              PRIVATE_ROOM_ID
+            );
+
+          socket.emit(
+            "keyBundle",
+            keyBundle
+          );
+
+        } catch (error) {
+
+          console.error(
+            "Key bundle request error:",
+            error.message
+          );
+
+          socket.emit(
+            "keyBundle",
+            null
+          );
+
+        }
+
+      }
+    );
+
+
+    // ==================================================
+    // SAVE SHARED KEY BUNDLE
+    // ==================================================
+
+    socket.on(
+      "saveKeyBundle",
+      async (data) => {
+
+        if (
+          !socket.data.authenticated
+        ) {
+          return;
+        }
+
+        if (
+          !data ||
+          typeof data !== "object" ||
+          typeof data.ciphertext !== "string" ||
+          typeof data.iv !== "string" ||
+          !data.ciphertext.length ||
+          !data.iv.length ||
+          data.ciphertext.length > 10000 ||
+          data.iv.length > 100
+        ) {
+          return;
+        }
+
+        try {
+
+          const existing =
+            await getKeyBundle(
+              PRIVATE_ROOM_ID
+            );
+
+          if (existing) {
+
+            socket.emit(
+              "keyBundleSaved",
+              {
+                success: true,
+                existing: true
+              }
+            );
+
+            return;
+          }
+
+          const saved =
+            await saveKeyBundle(
+              PRIVATE_ROOM_ID,
+              {
+                ciphertext:
+                  data.ciphertext,
+
+                iv:
+                  data.iv
+              }
+            );
+
+          const bundle =
+            saved
+              ? {
+                  ciphertext:
+                    data.ciphertext,
+
+                  iv:
+                    data.iv
+                }
+              : await getKeyBundle(
+                  PRIVATE_ROOM_ID
+                );
+
+          socket.emit(
+            "keyBundleSaved",
+            {
+              success: !!bundle,
+              existing: !saved
+            }
+          );
+
+          if (bundle) {
+
+            socket.to(
+              PRIVATE_ROOM_ID
+            ).emit(
+              "keyBundle",
+              bundle
+            );
+
+          }
+
+        } catch (error) {
+
+          console.error(
+            "Key bundle save error:",
+            error.message
+          );
+
+          socket.emit(
+            "keyBundleSaved",
+            {
+              success: false
+            }
           );
 
         }

@@ -49,6 +49,11 @@ interface MessageReceiptData {
   id: string;
 }
 
+interface KeyBundleData {
+  ciphertext: string;
+  iv: string;
+}
+
 
 // ==================================================
 // APP COMPONENT
@@ -615,6 +620,17 @@ export class AppComponent implements OnDestroy {
 
   private encryptionKey?: CryptoKey;
 
+  // Same master key is used on every browser/device.
+  // The current ECDH key is used only to migrate the
+  // existing working browser's messages.
+  private masterKey?: CryptoKey;
+
+  private keyBundleResolved = false;
+
+  private keyBundleExists = false;
+
+  private bundleCreationStarted = false;
+
 
   // ==================================================
   // PENDING DATA
@@ -684,6 +700,11 @@ export class AppComponent implements OnDestroy {
 
 
     this.loginError.set('');
+
+    this.masterKey = undefined;
+    this.keyBundleResolved = false;
+    this.keyBundleExists = false;
+    this.bundleCreationStarted = false;
 
     this.joined.set(true);
 
@@ -761,6 +782,11 @@ export class AppComponent implements OnDestroy {
 
         this.encryptionReady.set(false);
 
+        this.masterKey = undefined;
+        this.keyBundleResolved = false;
+        this.keyBundleExists = false;
+        this.bundleCreationStarted = false;
+
         this.peerPublicKey =
           undefined;
 
@@ -800,6 +826,15 @@ export class AppComponent implements OnDestroy {
         this.encryptionKey =
           undefined;
 
+        this.masterKey =
+          undefined;
+
+        this.keyBundleResolved =
+          false;
+
+        this.keyBundleExists =
+          false;
+
         this.peerPublicKey =
           undefined;
 
@@ -831,6 +866,69 @@ export class AppComponent implements OnDestroy {
           console.error(
             'Public key send failed:',
             error
+          );
+
+        }
+
+      }
+    );
+
+
+    // ==================================================
+    // SHARED KEY BUNDLE
+    // ==================================================
+
+    this.socket.on(
+      'keyBundle',
+      async (
+        bundle: KeyBundleData | null
+      ) => {
+
+        this.keyBundleResolved = true;
+
+        if (!bundle) {
+
+          this.keyBundleExists = false;
+
+          await this.useLegacyKeyIfReady();
+
+          return;
+        }
+
+        this.keyBundleExists = true;
+
+        try {
+
+          const master =
+            await this.unwrapMasterKey(
+              bundle
+            );
+
+          this.masterKey =
+            master;
+
+          this.encryptionKey =
+            master;
+
+          this.encryptionReady.set(
+            true
+          );
+
+          await this.processPendingData();
+
+        } catch (error) {
+
+          console.error(
+            'Shared key unlock failed:',
+            error
+          );
+
+          this.encryptionReady.set(
+            false
+          );
+
+          this.loginError.set(
+            'Unable to unlock the chat. Check the passcode.'
           );
 
         }
@@ -887,59 +985,7 @@ export class AppComponent implements OnDestroy {
 
           await this.deriveEncryptionKey();
 
-
-          this.encryptionReady.set(
-            true
-          );
-
-
-          // ==================================================
-          // PROCESS PENDING HISTORY
-          // ==================================================
-
-          if (this.pendingHistory) {
-
-            const history =
-              this.pendingHistory;
-
-            this.pendingHistory =
-              undefined;
-
-            await this.processHistory(
-              history
-            );
-
-          }
-
-
-          // ==================================================
-          // PROCESS PENDING MESSAGES
-          // ==================================================
-
-          if (
-            this.pendingMessages.length
-          ) {
-
-            const pending =
-              [
-                ...this.pendingMessages
-              ];
-
-            this.pendingMessages =
-              [];
-
-
-            for (
-              const message of pending
-            ) {
-
-              await this.processIncomingMessage(
-                message
-              );
-
-            }
-
-          }
+          await this.useLegacyKeyIfReady();
 
 
         } catch (error) {
@@ -957,6 +1003,30 @@ export class AppComponent implements OnDestroy {
             undefined;
 
         }
+
+      }
+    );
+
+
+    // ==================================================
+    // KEY BUNDLE SAVED
+    // ==================================================
+
+    this.socket.on(
+      'keyBundleSaved',
+      (
+        data: {
+          success?: boolean;
+          existing?: boolean;
+        }
+      ) => {
+
+        if (data?.success) {
+          this.keyBundleExists = true;
+        }
+
+        this.bundleCreationStarted =
+          false;
 
       }
     );
@@ -1454,6 +1524,9 @@ export class AppComponent implements OnDestroy {
     const decrypted:
       ChatMessage[] = [];
 
+    let decryptFailed =
+      false;
+
 
     for (
       const message of history
@@ -1510,6 +1583,9 @@ export class AppComponent implements OnDestroy {
 
 
       } catch (error) {
+
+        decryptFailed =
+          true;
 
         console.error(
           'Message decryption failed:',
@@ -1608,6 +1684,19 @@ export class AppComponent implements OnDestroy {
         );
 
       }
+
+    }
+
+
+    // One-time migration: only create the shared bundle
+    // if the current device successfully decrypted every
+    // existing encrypted message.
+    if (
+      !decryptFailed &&
+      !this.keyBundleExists
+    ) {
+
+      await this.createKeyBundleFromLegacyKey();
 
     }
 
@@ -1894,13 +1983,293 @@ export class AppComponent implements OnDestroy {
             256
         },
 
-        false,
+        true,
 
         [
           'encrypt',
           'decrypt'
         ]
       );
+
+  }
+
+
+  // ==================================================
+  // USE LEGACY KEY / PROCESS PENDING DATA
+  // ==================================================
+
+  private async useLegacyKeyIfReady() {
+
+    if (
+      !this.keyBundleResolved ||
+      this.keyBundleExists ||
+      !this.encryptionKey
+    ) {
+      return;
+    }
+
+    this.masterKey =
+      this.encryptionKey;
+
+    this.encryptionReady.set(
+      true
+    );
+
+    await this.processPendingData();
+
+  }
+
+
+  private async processPendingData() {
+
+    if (!this.encryptionKey) {
+      return;
+    }
+
+    if (this.pendingHistory) {
+
+      const history =
+        this.pendingHistory;
+
+      this.pendingHistory =
+        undefined;
+
+      await this.processHistory(
+        history
+      );
+
+    }
+
+    if (
+      this.pendingMessages.length
+    ) {
+
+      const pending =
+        [
+          ...this.pendingMessages
+        ];
+
+      this.pendingMessages =
+        [];
+
+      for (
+        const message of pending
+      ) {
+
+        await this.processIncomingMessage(
+          message
+        );
+
+      }
+
+    }
+
+  }
+
+
+  // ==================================================
+  // PASSWORD -> WRAPPING KEY
+  //
+  // Password remains inside the browser.
+  // PBKDF2 is only used to protect the master key bundle.
+  // ==================================================
+
+  private async derivePasswordKey(
+    salt: Uint8Array
+  ): Promise<CryptoKey> {
+
+    const passwordBytes =
+      new TextEncoder().encode(
+        this.passcode
+      );
+
+    const passwordKey =
+      await crypto.subtle.importKey(
+        'raw',
+        passwordBytes,
+        'PBKDF2',
+        false,
+        ['deriveKey']
+      );
+
+    return crypto.subtle.deriveKey(
+      {
+        name:
+          'PBKDF2',
+
+        salt,
+
+        iterations:
+          310000,
+
+        hash:
+          'SHA-256'
+      },
+
+      passwordKey,
+
+      {
+        name:
+          'AES-GCM',
+
+        length:
+          256
+      },
+
+      false,
+
+      [
+        'encrypt',
+        'decrypt'
+      ]
+    );
+
+  }
+
+
+  private async createKeyBundleFromLegacyKey() {
+
+    if (
+      this.bundleCreationStarted ||
+      this.keyBundleExists ||
+      !this.encryptionKey ||
+      !this.socket ||
+      !this.passcode
+    ) {
+      return;
+    }
+
+    this.bundleCreationStarted =
+      true;
+
+    try {
+
+      const masterRaw =
+        await crypto.subtle.exportKey(
+          'raw',
+          this.encryptionKey
+        );
+
+      const salt =
+        new Uint8Array(
+          await crypto.subtle.digest(
+            'SHA-256',
+            new TextEncoder().encode(
+              this.roomId
+            )
+          )
+        ).slice(0, 16);
+
+      const wrappingKey =
+        await this.derivePasswordKey(
+          salt
+        );
+
+      const iv =
+        crypto.getRandomValues(
+          new Uint8Array(12)
+        );
+
+      const wrapped =
+        await crypto.subtle.encrypt(
+          {
+            name:
+              'AES-GCM',
+
+            iv
+          },
+
+          wrappingKey,
+
+          masterRaw
+        );
+
+      this.socket.emit(
+        'saveKeyBundle',
+        {
+          ciphertext:
+            this.arrayBufferToBase64(
+              wrapped
+            ),
+
+          iv:
+            this.arrayBufferToBase64(
+              iv
+            )
+        }
+      );
+
+    } catch (error) {
+
+      console.error(
+        'Master key migration failed:',
+        error
+      );
+
+      this.bundleCreationStarted =
+        false;
+
+    }
+
+  }
+
+
+  private async unwrapMasterKey(
+    bundle: KeyBundleData
+  ): Promise<CryptoKey> {
+
+    const salt =
+      new Uint8Array(
+        await crypto.subtle.digest(
+          'SHA-256',
+          new TextEncoder().encode(
+            this.roomId
+          )
+        )
+      ).slice(0, 16);
+
+    const wrappingKey =
+      await this.derivePasswordKey(
+        salt
+      );
+
+    const iv =
+      this.base64ToUint8Array(
+        bundle.iv
+      );
+
+    const wrapped =
+      this.base64ToUint8Array(
+        bundle.ciphertext
+      );
+
+    const raw =
+      await crypto.subtle.decrypt(
+        {
+          name:
+            'AES-GCM',
+
+          iv
+        },
+
+        wrappingKey,
+
+        wrapped
+      );
+
+    return crypto.subtle.importKey(
+      'raw',
+      raw,
+      {
+        name:
+          'AES-GCM'
+      },
+      true,
+      [
+        'encrypt',
+        'decrypt'
+      ]
+    );
 
   }
 
@@ -1918,9 +2287,11 @@ export class AppComponent implements OnDestroy {
     iv: string;
   }> {
 
-    if (
-      !this.encryptionKey
-    ) {
+    const key =
+      this.masterKey ||
+      this.encryptionKey;
+
+    if (!key) {
 
       throw new Error(
         'Encryption key is not ready.'
@@ -1967,7 +2338,7 @@ export class AppComponent implements OnDestroy {
           iv
         },
 
-        this.encryptionKey,
+        key,
 
         encoded
       );
@@ -1999,9 +2370,11 @@ export class AppComponent implements OnDestroy {
     iv: string
   ): Promise<string> {
 
-    if (
-      !this.encryptionKey
-    ) {
+    const key =
+      this.masterKey ||
+      this.encryptionKey;
+
+    if (!key) {
 
       throw new Error(
         'Encryption key is not ready.'
@@ -2032,7 +2405,7 @@ export class AppComponent implements OnDestroy {
             initializationVector
         },
 
-        this.encryptionKey,
+        key,
 
         encrypted
       );
