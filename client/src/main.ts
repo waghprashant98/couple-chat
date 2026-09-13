@@ -17,6 +17,9 @@ interface EncryptedMessage {
   time: string;
   mine?: boolean;
   replyToId?: string | null;
+
+  deliveredAt?: string | null;
+  readAt?: string | null;
 }
 
 interface ChatMessage {
@@ -1429,8 +1432,8 @@ export class AppComponent implements OnDestroy {
       const replyTo =
         parsed.replyToId
           ? this.findMessageById(
-              parsed.replyToId
-            )
+            parsed.replyToId
+          )
           : null;
 
 
@@ -1770,7 +1773,7 @@ export class AppComponent implements OnDestroy {
       if (
         parsed &&
         typeof parsed.text ===
-          'string'
+        'string'
       ) {
 
         return {
@@ -2475,8 +2478,8 @@ export class AppComponent implements OnDestroy {
       buffer instanceof Uint8Array
         ? buffer
         : new Uint8Array(
-            buffer
-          );
+          buffer
+        );
 
 
     let binary = '';
@@ -2878,7 +2881,7 @@ export class AppComponent implements OnDestroy {
 
         const element =
           elements[
-            index
+          index
           ] as HTMLElement |
           undefined;
 
