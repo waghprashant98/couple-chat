@@ -631,6 +631,11 @@ export class AppComponent implements OnDestroy {
 
   private bundleCreationStarted = false;
 
+  private bundleMigrationAttempts = 0;
+
+  private bundleMigrationTimer?:
+    ReturnType<typeof setTimeout>;
+
 
   // ==================================================
   // PENDING DATA
@@ -1022,11 +1027,29 @@ export class AppComponent implements OnDestroy {
       ) => {
 
         if (data?.success) {
+
           this.keyBundleExists = true;
+
+          this.bundleCreationStarted =
+            false;
+
+          this.bundleMigrationAttempts =
+            0;
+
+          clearTimeout(
+            this.bundleMigrationTimer
+          );
+
+          this.bundleMigrationTimer =
+            undefined;
+
+          return;
         }
 
         this.bundleCreationStarted =
           false;
+
+        this.retryKeyBundleMigration();
 
       }
     );
@@ -2130,7 +2153,6 @@ export class AppComponent implements OnDestroy {
   private async createKeyBundleFromLegacyKey() {
 
     if (
-      this.bundleCreationStarted ||
       this.keyBundleExists ||
       !this.encryptionKey ||
       !this.socket ||
@@ -2139,10 +2161,20 @@ export class AppComponent implements OnDestroy {
       return;
     }
 
+    if (this.bundleCreationStarted) {
+      return;
+    }
+
     this.bundleCreationStarted =
       true;
 
     try {
+
+      // First ask the server once more in case another
+      // browser/device created the bundle meanwhile.
+      this.socket.emit(
+        'requestKeyBundle'
+      );
 
       const masterRaw =
         await crypto.subtle.exportKey(
@@ -2199,6 +2231,29 @@ export class AppComponent implements OnDestroy {
         }
       );
 
+      // Do not assume that emit succeeded. The server
+      // must confirm with keyBundleSaved.
+      this.bundleMigrationAttempts++;
+
+      this.bundleMigrationTimer =
+        setTimeout(
+          () => {
+
+            if (
+              !this.keyBundleExists
+            ) {
+
+              this.bundleCreationStarted =
+                false;
+
+              this.retryKeyBundleMigration();
+
+            }
+
+          },
+          2000
+        );
+
     } catch (error) {
 
       console.error(
@@ -2209,7 +2264,49 @@ export class AppComponent implements OnDestroy {
       this.bundleCreationStarted =
         false;
 
+      this.retryKeyBundleMigration();
+
     }
+
+  }
+
+
+  private retryKeyBundleMigration() {
+
+    if (
+      this.keyBundleExists ||
+      !this.encryptionKey ||
+      !this.socket ||
+      !this.passcode
+    ) {
+      return;
+    }
+
+    if (
+      this.bundleMigrationAttempts >= 5
+    ) {
+      console.error(
+        'Unable to create the shared encryption key bundle after multiple attempts.'
+      );
+      return;
+    }
+
+    clearTimeout(
+      this.bundleMigrationTimer
+    );
+
+    this.bundleMigrationTimer =
+      setTimeout(
+        () => {
+
+          this.bundleMigrationTimer =
+            undefined;
+
+          this.createKeyBundleFromLegacyKey();
+
+        },
+        1000
+      );
 
   }
 
@@ -2987,6 +3084,9 @@ export class AppComponent implements OnDestroy {
 
     this.cancelLongPress();
 
+    clearTimeout(
+      this.bundleMigrationTimer
+    );
 
     this.socket?.disconnect();
 
