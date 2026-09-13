@@ -1432,6 +1432,20 @@ io.on(
       "saveKeyBundle",
       async (data) => {
 
+        console.log(
+          "Key bundle save request received:",
+          {
+            user: socket.data.name,
+            roomId: socket.data.roomId,
+            hasCiphertext:
+              typeof data?.ciphertext === "string" &&
+              data.ciphertext.length > 0,
+            hasIv:
+              typeof data?.iv === "string" &&
+              data.iv.length > 0
+          }
+        );
+
         if (
           !socket.data.authenticated
         ) {
@@ -1495,6 +1509,15 @@ io.on(
               : await getKeyBundle(
                   PRIVATE_ROOM_ID
                 );
+
+          console.log(
+            "Key bundle save result:",
+            {
+              user: socket.data.name,
+              saved,
+              bundleExists: !!bundle
+            }
+          );
 
           socket.emit(
             "keyBundleSaved",
