@@ -173,7 +173,7 @@ function recordFailedJoinAttempt(ip) {
   if (
     !entry ||
     now - entry.firstAttemptAt >=
-      JOIN_RATE_LIMIT_WINDOW_MS
+    JOIN_RATE_LIMIT_WINDOW_MS
   ) {
 
     failedJoinAttempts.set(
@@ -2661,6 +2661,24 @@ io.on(
   }
 );
 
+// ==================================================
+// SERVICE WORKER
+// ==================================================
+
+app.get(
+  "/sw.js",
+  (_, res) => {
+
+    res.sendFile(
+      path.join(
+        clientDist,
+        "assets",
+        "sw.js"
+      )
+    );
+
+  }
+);
 
 // ==================================================
 // ANGULAR FALLBACK
