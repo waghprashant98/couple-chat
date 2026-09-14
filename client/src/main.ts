@@ -1282,8 +1282,7 @@ export class AppComponent implements OnDestroy {
     this.socket.emit(
       'message',
       {
-        message:
-          text,
+        text,
 
         replyToId
       }
