@@ -82,6 +82,71 @@ const failedJoinAttempts =
   new Map();
 
 
+// ==================================================
+// MESSAGE RATE LIMIT
+//
+// Maximum 30 messages per 10 seconds and
+// maximum 150 messages per minute per user.
+// Each user has an independent limit.
+// ==================================================
+
+const MESSAGE_RATE_LIMIT_SHORT_MAX = 30;
+const MESSAGE_RATE_LIMIT_SHORT_WINDOW_MS = 10 * 1000;
+const MESSAGE_RATE_LIMIT_LONG_MAX = 150;
+const MESSAGE_RATE_LIMIT_LONG_WINDOW_MS = 60 * 1000;
+
+const messageRateLimits =
+  new Map();
+
+
+function isMessageRateLimited(username) {
+
+  const key =
+    String(username || "")
+      .trim()
+      .toLowerCase();
+
+  const now = Date.now();
+
+  let entry =
+    messageRateLimits.get(key);
+
+  if (!entry) {
+    entry = {
+      shortWindow: [],
+      longWindow: []
+    };
+
+    messageRateLimits.set(key, entry);
+  }
+
+  entry.shortWindow =
+    entry.shortWindow.filter(
+      timestamp =>
+        now - timestamp < MESSAGE_RATE_LIMIT_SHORT_WINDOW_MS
+    );
+
+  entry.longWindow =
+    entry.longWindow.filter(
+      timestamp =>
+        now - timestamp < MESSAGE_RATE_LIMIT_LONG_WINDOW_MS
+    );
+
+  if (
+    entry.shortWindow.length >= MESSAGE_RATE_LIMIT_SHORT_MAX ||
+    entry.longWindow.length >= MESSAGE_RATE_LIMIT_LONG_MAX
+  ) {
+    return true;
+  }
+
+  entry.shortWindow.push(now);
+  entry.longWindow.push(now);
+
+  return false;
+}
+
+
+
 function getClientIp(socket) {
 
   const forwardedFor =
@@ -1048,6 +1113,17 @@ FROM (
         if (
           !roomId ||
           !name
+        ) {
+          return;
+        }
+
+
+        // --------------------------------------------------
+        // MESSAGE RATE LIMIT
+        // --------------------------------------------------
+
+        if (
+          isMessageRateLimited(name)
         ) {
           return;
         }
