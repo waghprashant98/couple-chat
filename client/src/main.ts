@@ -349,6 +349,80 @@ interface KeyBundleData {
   styles: [`
 
     /* ==============================================
+   NOTIFICATION BUTTON
+============================================== */
+
+.notification-btn {
+  width: 38px;
+  height: 38px;
+
+  padding: 0;
+  margin: 0;
+
+  border: 0;
+  border-radius: 12px;
+
+  background: transparent;
+  color: #8d6875;
+
+  font-size: 18px;
+
+  display: grid;
+  place-items: center;
+
+  flex: 0 0 38px;
+
+  position: relative;
+  z-index: 20;
+
+  cursor: pointer;
+
+  box-shadow: none;
+}
+
+.notification-btn::before {
+  display: none;
+}
+
+.notification-btn:hover {
+  background: #f8e8ed;
+  color: #c05270;
+
+  transform: scale(1.06);
+
+  box-shadow: none;
+}
+
+.notification-btn:active {
+  transform: scale(.94);
+}
+
+
+/* ==============================================
+   MOBILE NOTIFICATION BUTTON
+============================================== */
+
+@media (max-width: 600px) {
+
+  .notification-btn {
+    display: grid !important;
+
+    visibility: visible !important;
+
+    opacity: 1 !important;
+
+    width: 38px;
+    height: 38px;
+
+    flex: 0 0 38px;
+
+    position: relative;
+    z-index: 100;
+  }
+
+}
+
+    /* ==============================================
        LOGIN ERROR
     =============================================== */
 
