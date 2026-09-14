@@ -221,9 +221,6 @@ async function initDb() {
     ALTER TABLE messages
       ADD COLUMN IF NOT EXISTS read_at TIMESTAMPTZ;
 
-    ALTER TABLE messages
-      ALTER COLUMN message DROP NOT NULL;
-
     CREATE INDEX IF NOT EXISTS messages_room_created_idx
       ON messages(room_id, created_at);
 
@@ -892,27 +889,23 @@ io.on(
               await pool.query(
                 `
     SELECT
-      id,
-      sender,
-      message,
-      ciphertext,
-      iv,
-      reply_to_id,
-      delivered_at,
-      read_at,
-      created_at
-    FROM (
-      SELECT
-        id,
-        sender,
-        message,
-        ciphertext,
-        iv,
-        reply_to_id,
-        delivered_at,
-        read_at,
-        created_at
-      FROM messages
+  id,
+  sender,
+  message,
+  reply_to_id,
+  delivered_at,
+  read_at,
+  created_at
+FROM (
+  SELECT
+    id,
+    sender,
+    message,
+    reply_to_id,
+    delivered_at,
+    read_at,
+    created_at
+  FROM messages
       WHERE room_id = $1
       ORDER BY created_at DESC
       LIMIT 200
@@ -1019,351 +1012,7 @@ io.on(
 
 
     // ==================================================
-    // PUBLIC KEY
-    // ==================================================
-
-    socket.on(
-      "publicKey",
-      async (data) => {
-
-        if (
-          !socket.data.authenticated
-        ) {
-          return;
-        }
-
-
-        const name =
-          socket.data.name;
-
-
-        if (!name) {
-          return;
-        }
-
-
-        if (
-          !data ||
-          typeof data !== "object"
-        ) {
-          return;
-        }
-
-
-        if (
-          typeof data.key !==
-          "object" ||
-          data.key === null
-        ) {
-          return;
-        }
-
-
-        // --------------------------------------------------
-        // Basic JWK validation
-        // --------------------------------------------------
-
-        if (
-          data.key.kty !==
-          "EC" ||
-          data.key.crv !==
-          "P-256" ||
-          typeof data.key.x !==
-          "string" ||
-          typeof data.key.y !==
-          "string"
-        ) {
-          return;
-        }
-
-
-        try {
-
-          // ==================================================
-          // PERSIST PUBLIC KEY
-          // ==================================================
-
-          await savePublicKey(
-            name,
-            data.key
-          );
-
-
-          // ==================================================
-          // SEND TO CURRENT PEER IF ONLINE
-          // ==================================================
-
-          socket.to(
-            PRIVATE_ROOM_ID
-          ).emit(
-            "peerPublicKey",
-            {
-              name,
-              key:
-                data.key
-            }
-          );
-
-
-        } catch (error) {
-
-          console.error(
-            "Public key save error:",
-            error.message
-          );
-
-        }
-
-      }
-    );
-
-
-    // ==================================================
-    // REQUEST PEER PUBLIC KEY
-    // ==================================================
-
-    socket.on(
-      "requestPeerKey",
-      async () => {
-
-        if (
-          !socket.data.authenticated
-        ) {
-          return;
-        }
-
-
-        const currentName =
-          socket.data.name;
-
-
-        const peerName =
-          getPeerName(
-            currentName
-          );
-
-
-        if (!peerName) {
-          return;
-        }
-
-
-        try {
-
-          const peerKey =
-            await getStoredPublicKey(
-              peerName
-            );
-
-
-          if (peerKey) {
-
-            socket.emit(
-              "peerPublicKey",
-              {
-                name:
-                  peerName,
-
-                key:
-                  peerKey
-              }
-            );
-
-          }
-
-        } catch (error) {
-
-          console.error(
-            "Peer key request error:",
-            error.message
-          );
-
-        }
-
-      }
-    );
-
-
-    // ==================================================
-    // REQUEST SHARED KEY BUNDLE
-    // ==================================================
-
-    socket.on(
-      "requestKeyBundle",
-      async () => {
-
-        if (
-          !socket.data.authenticated
-        ) {
-          return;
-        }
-
-        try {
-
-          const keyBundle =
-            await getKeyBundle(
-              PRIVATE_ROOM_ID
-            );
-
-          socket.emit(
-            "keyBundle",
-            keyBundle
-          );
-
-        } catch (error) {
-
-          console.error(
-            "Key bundle request error:",
-            error.message
-          );
-
-          socket.emit(
-            "keyBundle",
-            null
-          );
-
-        }
-
-      }
-    );
-
-
-    // ==================================================
-    // SAVE SHARED KEY BUNDLE
-    // ==================================================
-
-    socket.on(
-      "saveKeyBundle",
-      async (data) => {
-
-        console.log(
-          "Key bundle save request received:",
-          {
-            user: socket.data.name,
-            roomId: socket.data.roomId,
-            hasCiphertext:
-              typeof data?.ciphertext === "string" &&
-              data.ciphertext.length > 0,
-            hasIv:
-              typeof data?.iv === "string" &&
-              data.iv.length > 0
-          }
-        );
-
-        if (
-          !socket.data.authenticated
-        ) {
-          return;
-        }
-
-        if (
-          !data ||
-          typeof data !== "object" ||
-          typeof data.ciphertext !== "string" ||
-          typeof data.iv !== "string" ||
-          !data.ciphertext.length ||
-          !data.iv.length ||
-          data.ciphertext.length > 10000 ||
-          data.iv.length > 100
-        ) {
-          return;
-        }
-
-        try {
-
-          const existing =
-            await getKeyBundle(
-              PRIVATE_ROOM_ID
-            );
-
-          if (existing) {
-
-            socket.emit(
-              "keyBundleSaved",
-              {
-                success: true,
-                existing: true
-              }
-            );
-
-            return;
-          }
-
-          const saved =
-            await saveKeyBundle(
-              PRIVATE_ROOM_ID,
-              {
-                ciphertext:
-                  data.ciphertext,
-
-                iv:
-                  data.iv
-              }
-            );
-
-          const bundle =
-            saved
-              ? {
-                ciphertext:
-                  data.ciphertext,
-
-                iv:
-                  data.iv
-              }
-              : await getKeyBundle(
-                PRIVATE_ROOM_ID
-              );
-
-          console.log(
-            "Key bundle save result:",
-            {
-              user: socket.data.name,
-              saved,
-              bundleExists: !!bundle
-            }
-          );
-
-          socket.emit(
-            "keyBundleSaved",
-            {
-              success: !!bundle,
-              existing: !saved
-            }
-          );
-
-          if (bundle) {
-
-            socket.to(
-              PRIVATE_ROOM_ID
-            ).emit(
-              "keyBundle",
-              bundle
-            );
-
-          }
-
-        } catch (error) {
-
-          console.error(
-            "Key bundle save error:",
-            error.message
-          );
-
-          socket.emit(
-            "keyBundleSaved",
-            {
-              success: false
-            }
-          );
-
-        }
-
-      }
-    );
-
-
-    // ==================================================
-    // SEND ENCRYPTED MESSAGE
+    // SEND MESSAGE
     // ==================================================
 
     socket.on(
@@ -1458,7 +1107,7 @@ io.on(
 
 
         // ==================================================
-        // SAVE ENCRYPTED MESSAGE
+        // SAVE MESSAGE
         // ==================================================
 
         if (pool) {
@@ -1526,7 +1175,7 @@ io.on(
 
 
         // ==================================================
-        // ENCRYPTED MESSAGE PAYLOAD
+        // MESSAGE PAYLOAD
         // ==================================================
 
         const payload = {

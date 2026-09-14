@@ -745,7 +745,7 @@ export class AppComponent implements OnDestroy {
 
 
     // ==================================================
-    // NEW ENCRYPTED MESSAGE
+    // NEW MESSAGE
     // ==================================================
 
     this.socket.on(
