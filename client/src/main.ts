@@ -130,9 +130,9 @@ interface MessageReceiptData {
 
     <h2>My Love</h2>
 
-    <span [class.offline]="!online()">
+    <span [class.offline]="!peerOnline()">
       <i></i>
-      {{ online() ? (typing() || 'Online') : 'Connecting…' }}
+      {{ peerOnline() ? (typing() || 'Online') : lastSeenText() }}
     </span>
 
   </div>
