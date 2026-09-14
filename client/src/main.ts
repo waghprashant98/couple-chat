@@ -678,6 +678,9 @@ export class AppComponent implements OnDestroy {
   private reconnectTimer?:
     ReturnType<typeof setTimeout>;
 
+  // Web Push state
+  private pushEnabled = false;
+
 
   // ==================================================
   // LONG PRESS
@@ -1508,7 +1511,8 @@ export class AppComponent implements OnDestroy {
         !mine &&
         'Notification' in window &&
         Notification.permission === 'granted' &&
-        document.visibilityState !== 'visible'
+        document.visibilityState !== 'visible' &&
+        !this.pushEnabled
       ) {
 
         new Notification(
@@ -2630,7 +2634,7 @@ export class AppComponent implements OnDestroy {
   }
 
   // ==================================================
-  // BROWSER NOTIFICATIONS
+  // WEB PUSH NOTIFICATIONS
   // ==================================================
 
   async enableNotifications() {
@@ -2645,12 +2649,74 @@ export class AppComponent implements OnDestroy {
 
     }
 
-    const permission =
-      await Notification.requestPermission();
+    if (!('serviceWorker' in navigator)) {
 
-    if (permission === 'granted') {
+      alert(
+        'Push notifications are not supported in this browser.'
+      );
 
-      new Notification(
+      return;
+
+    }
+
+    if (!('PushManager' in window)) {
+
+      alert(
+        'Push notifications are not supported in this browser.'
+      );
+
+      return;
+
+    }
+
+    try {
+
+      const permission =
+        await Notification.requestPermission();
+
+      if (permission !== 'granted') {
+
+        alert(
+          'Please allow notifications in your browser settings.'
+        );
+
+        return;
+
+      }
+
+      const registration =
+        await navigator.serviceWorker.register(
+          '/sw.js'
+        );
+
+      let subscription =
+        await registration.pushManager.getSubscription();
+
+      if (!subscription) {
+
+        const vapidPublicKey =
+          'BFUFKOZdPgw_2TuVYiHRkOzA8C9BBLJWYhaAmbILvqnw1OzhYDdzMeADe2KrC36gToeZc1NHJdWaF2o3agUu1WA';
+
+        subscription =
+          await registration.pushManager.subscribe({
+            userVisibleOnly: true,
+
+            applicationServerKey:
+              this.urlBase64ToUint8Array(
+                vapidPublicKey
+              )
+          });
+
+      }
+
+      this.socket?.emit(
+        'pushSubscription',
+        subscription.toJSON()
+      );
+
+      this.pushEnabled = true;
+
+      await registration.showNotification(
         'Our Little Corner ❤️',
         {
           body:
@@ -2660,7 +2726,58 @@ export class AppComponent implements OnDestroy {
         }
       );
 
+    } catch (error) {
+
+      console.error(
+        'Push notification setup failed:',
+        error
+      );
+
+      alert(
+        'Could not enable notifications. Please try again.'
+      );
+
     }
+
+  }
+
+
+  private urlBase64ToUint8Array(
+    value: string
+  ): Uint8Array {
+
+    const padding =
+      '='.repeat(
+        (4 - value.length % 4) % 4
+      );
+
+    const base64 =
+      (
+        value + padding
+      )
+        .replace(/-/g, '+')
+        .replace(/_/g, '/');
+
+    const rawData =
+      atob(base64);
+
+    const output =
+      new Uint8Array(
+        rawData.length
+      );
+
+    for (
+      let i = 0;
+      i < rawData.length;
+      i++
+    ) {
+
+      output[i] =
+        rawData.charCodeAt(i);
+
+    }
+
+    return output;
 
   }
 

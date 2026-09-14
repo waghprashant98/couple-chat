@@ -4,6 +4,7 @@ const path = require("path");
 const crypto = require("crypto");
 const { Server } = require("socket.io");
 const { Pool } = require("pg");
+const webpush = require("web-push");
 
 const app = express();
 const server = http.createServer(app);
@@ -67,6 +68,46 @@ const CHAT_PASSCODE =
   String(
     process.env.CHAT_PASSCODE || ""
   );
+
+/* ==================================================
+   WEB PUSH
+================================================== */
+
+const VAPID_PUBLIC_KEY =
+  String(
+    process.env.VAPID_PUBLIC_KEY || ""
+  );
+
+const VAPID_PRIVATE_KEY =
+  String(
+    process.env.VAPID_PRIVATE_KEY || ""
+  );
+
+const VAPID_SUBJECT =
+  String(
+    process.env.VAPID_SUBJECT ||
+    "https://couple-chat-8msk.onrender.com"
+  );
+
+if (
+  VAPID_PUBLIC_KEY &&
+  VAPID_PRIVATE_KEY
+) {
+  webpush.setVapidDetails(
+    VAPID_SUBJECT,
+    VAPID_PUBLIC_KEY,
+    VAPID_PRIVATE_KEY
+  );
+
+  console.log("Web Push ready");
+} else {
+  console.warn(
+    "Web Push VAPID keys are not configured."
+  );
+}
+
+const pushSubscriptions = new Map();
+
 
 
 // ==================================================
@@ -339,6 +380,77 @@ function getPeerName(name) {
   return null;
 
 }
+
+/* ==================================================
+   WEB PUSH HELPERS
+================================================== */
+
+function isValidPushSubscription(subscription) {
+
+  return !!(
+    subscription &&
+    typeof subscription === "object" &&
+    typeof subscription.endpoint === "string" &&
+    subscription.endpoint.length > 0 &&
+    subscription.keys &&
+    typeof subscription.keys === "object" &&
+    typeof subscription.keys.p256dh === "string" &&
+    typeof subscription.keys.auth === "string"
+  );
+
+}
+
+async function sendPushNotification(
+  username,
+  senderName
+) {
+
+  if (!VAPID_PUBLIC_KEY || !VAPID_PRIVATE_KEY) {
+    return;
+  }
+
+  const subscription =
+    pushSubscriptions.get(
+      String(username).toLowerCase()
+    );
+
+  if (!subscription) {
+    return;
+  }
+
+  try {
+
+    await webpush.sendNotification(
+      subscription,
+      JSON.stringify({
+        title: `${senderName} ❤️`,
+        body: "You have a new message",
+        icon: "/favicon.ico",
+        url: "/"
+      })
+    );
+
+  } catch (error) {
+
+    console.error(
+      "Push notification error:",
+      error.statusCode,
+      error.message
+    );
+
+    if (
+      error.statusCode === 404 ||
+      error.statusCode === 410
+    ) {
+      pushSubscriptions.delete(
+        String(username).toLowerCase()
+      );
+    }
+
+  }
+
+}
+
 
 
 // ==================================================
@@ -886,6 +998,39 @@ async function broadcastPresence(
 io.on(
   "connection",
   (socket) => {
+
+
+    /* ==================================================
+       SAVE PUSH SUBSCRIPTION
+    ================================================== */
+
+    socket.on(
+      "pushSubscription",
+      (subscription) => {
+
+        if (!socket.data.authenticated) {
+          return;
+        }
+
+        if (!isValidPushSubscription(subscription)) {
+          return;
+        }
+
+        const username =
+          String(socket.data.name).toLowerCase();
+
+        pushSubscriptions.set(
+          username,
+          subscription
+        );
+
+        console.log(
+          "Push subscription saved:",
+          username
+        );
+
+      }
+    );
 
 
     // ==================================================
@@ -1924,6 +2069,23 @@ io.on(
           "message",
           payload
         );
+
+
+        /* ==================================================
+           SEND MOBILE PUSH NOTIFICATION
+        ================================================== */
+
+        const notificationPeer =
+          getPeerName(name);
+
+        if (notificationPeer) {
+
+          await sendPushNotification(
+            notificationPeer,
+            name
+          );
+
+        }
 
 
         // ==================================================
