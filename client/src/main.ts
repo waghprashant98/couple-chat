@@ -136,31 +136,29 @@ interface KeyBundleData {
 
         <header>
 
-          <div class="avatar">♥</div>
+  <div class="avatar">♥</div>
 
-          <div class="head-text">
+  <div class="head-text">
 
-            <h2>My Love</h2>
+    <h2>My Love</h2>
 
-            <span
-              class="presence-text"
-              [class.offline]="!peerOnline()"
-            >
-              <i></i>
+    <span [class.offline]="!online()">
+      <i></i>
+      {{ online() ? (typing() || 'Online') : 'Connecting…' }}
+    </span>
 
-              @if (typing()) {
-                {{ typing() }}
-              } @else if (peerOnline()) {
-                Online
-              } @else {
-                {{ lastSeenText() }}
-              }
+  </div>
 
-            </span>
+  <button
+    type="button"
+    class="notification-btn"
+    (click)="enableNotifications()"
+    title="Enable notifications"
+  >
+    🔔
+  </button>
 
-          </div>
-
-        </header>
+</header>
 
 
         <!-- ==========================================
@@ -1428,6 +1426,29 @@ export class AppComponent implements OnDestroy {
         message.name.toLowerCase() ===
         this.name.toLowerCase();
 
+      // ==================================================
+      // SHOW BROWSER NOTIFICATION
+      // ==================================================
+
+      if (
+        !mine &&
+        'Notification' in window &&
+        Notification.permission === 'granted' &&
+        document.visibilityState !== 'visible'
+      ) {
+
+        new Notification(
+          `${message.name} ❤️`,
+          {
+            body:
+              parsed.text,
+
+            icon:
+              '/favicon.ico'
+          }
+        );
+
+      }
 
       const replyTo =
         parsed.replyToId
@@ -2534,6 +2555,40 @@ export class AppComponent implements OnDestroy {
 
   }
 
+  // ==================================================
+  // BROWSER NOTIFICATIONS
+  // ==================================================
+
+  async enableNotifications() {
+
+    if (!('Notification' in window)) {
+
+      alert(
+        'Your browser does not support notifications.'
+      );
+
+      return;
+
+    }
+
+    const permission =
+      await Notification.requestPermission();
+
+    if (permission === 'granted') {
+
+      new Notification(
+        'Our Little Corner ❤️',
+        {
+          body:
+            'Notifications are enabled.',
+          icon:
+            '/favicon.ico'
+        }
+      );
+
+    }
+
+  }
 
   // ==================================================
   // SEND MESSAGE
