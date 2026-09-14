@@ -4,7 +4,6 @@ const path = require("path");
 const crypto = require("crypto");
 const { Server } = require("socket.io");
 const { Pool } = require("pg");
-const webpush = require("web-push");
 
 const app = express();
 const server = http.createServer(app);
@@ -68,47 +67,6 @@ const CHAT_PASSCODE =
   String(
     process.env.CHAT_PASSCODE || ""
   );
-
-/* ==================================================
-   WEB PUSH
-================================================== */
-
-const VAPID_PUBLIC_KEY =
-  String(
-    process.env.VAPID_PUBLIC_KEY || ""
-  );
-
-const VAPID_PRIVATE_KEY =
-  String(
-    process.env.VAPID_PRIVATE_KEY || ""
-  );
-
-const VAPID_SUBJECT =
-  String(
-    process.env.VAPID_SUBJECT ||
-    "https://couple-chat-8msk.onrender.com"
-  );
-
-if (
-  VAPID_PUBLIC_KEY &&
-  VAPID_PRIVATE_KEY
-) {
-  webpush.setVapidDetails(
-    VAPID_SUBJECT,
-    VAPID_PUBLIC_KEY,
-    VAPID_PRIVATE_KEY
-  );
-
-  console.log("Web Push ready");
-} else {
-  console.warn(
-    "Web Push VAPID keys are not configured."
-  );
-}
-
-const pushSubscriptions = new Map();
-
-
 
 // ==================================================
 // JOIN RATE LIMIT
@@ -219,8 +177,6 @@ const pool =
 // IN-MEMORY ONLINE SOCKETS
 //
 // Only presence information is kept in memory.
-// Public keys are now stored persistently in DB.
-//
 // username -> socket.id
 // ==================================================
 
@@ -250,19 +206,11 @@ async function initDb() {
       room_id VARCHAR(100) NOT NULL,
       sender VARCHAR(24) NOT NULL,
       message TEXT,
-      ciphertext TEXT,
-      iv TEXT,
       reply_to_id BIGINT,
       delivered_at TIMESTAMPTZ,
       read_at TIMESTAMPTZ,
       created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
     );
-
-    ALTER TABLE messages
-      ADD COLUMN IF NOT EXISTS ciphertext TEXT;
-
-    ALTER TABLE messages
-      ADD COLUMN IF NOT EXISTS iv TEXT;
 
     ALTER TABLE messages
       ADD COLUMN IF NOT EXISTS reply_to_id BIGINT;
@@ -283,25 +231,11 @@ async function initDb() {
       ON messages(reply_to_id);
 
 
-    CREATE TABLE IF NOT EXISTS chat_public_keys (
-      username VARCHAR(24) PRIMARY KEY,
-      public_key JSONB NOT NULL,
-      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-    );
-
-
     CREATE TABLE IF NOT EXISTS chat_presence (
       username VARCHAR(24) PRIMARY KEY,
       last_seen TIMESTAMPTZ
     );
 
-    CREATE TABLE IF NOT EXISTS chat_key_bundle (
-      room_id VARCHAR(100) PRIMARY KEY,
-      ciphertext TEXT NOT NULL,
-      iv TEXT NOT NULL,
-      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-    );
   `);
 
 
@@ -381,78 +315,6 @@ function getPeerName(name) {
 
 }
 
-/* ==================================================
-   WEB PUSH HELPERS
-================================================== */
-
-function isValidPushSubscription(subscription) {
-
-  return !!(
-    subscription &&
-    typeof subscription === "object" &&
-    typeof subscription.endpoint === "string" &&
-    subscription.endpoint.length > 0 &&
-    subscription.keys &&
-    typeof subscription.keys === "object" &&
-    typeof subscription.keys.p256dh === "string" &&
-    typeof subscription.keys.auth === "string"
-  );
-
-}
-
-async function sendPushNotification(
-  username,
-  senderName
-) {
-
-  if (!VAPID_PUBLIC_KEY || !VAPID_PRIVATE_KEY) {
-    return;
-  }
-
-  const subscription =
-    pushSubscriptions.get(
-      String(username).toLowerCase()
-    );
-
-  if (!subscription) {
-    return;
-  }
-
-  try {
-
-    await webpush.sendNotification(
-      subscription,
-      JSON.stringify({
-        title: `${senderName} ❤️`,
-        body: "You have a new message",
-        icon: "/favicon.ico",
-        url: "/"
-      })
-    );
-
-  } catch (error) {
-
-    console.error(
-      "Push notification error:",
-      error.statusCode,
-      error.message
-    );
-
-    if (
-      error.statusCode === 404 ||
-      error.statusCode === 410
-    ) {
-      pushSubscriptions.delete(
-        String(username).toLowerCase()
-      );
-    }
-
-  }
-
-}
-
-
-
 // ==================================================
 // PASSCODE CHECK
 // ==================================================
@@ -489,222 +351,6 @@ function isValidPasscode(value) {
     expected
   );
 
-}
-
-
-// ==================================================
-// E2E PAYLOAD VALIDATION
-// ==================================================
-
-function isValidEncryptedMessage(data) {
-
-  if (
-    !data ||
-    typeof data !== "object"
-  ) {
-    return false;
-  }
-
-
-  if (
-    typeof data.ciphertext !==
-    "string"
-  ) {
-    return false;
-  }
-
-
-  if (
-    typeof data.iv !==
-    "string"
-  ) {
-    return false;
-  }
-
-
-  if (
-    !data.ciphertext.length ||
-    !data.iv.length
-  ) {
-    return false;
-  }
-
-
-  if (
-    data.ciphertext.length >
-    9000
-  ) {
-    return false;
-  }
-
-
-  if (
-    data.iv.length >
-    100
-  ) {
-    return false;
-  }
-
-
-  return true;
-
-}
-
-
-// ==================================================
-// GET STORED PUBLIC KEY
-// ==================================================
-
-async function getStoredPublicKey(
-  username
-) {
-
-  if (!pool) {
-    return null;
-  }
-
-
-  const result =
-    await pool.query(
-      `
-      SELECT
-        username,
-        public_key
-      FROM chat_public_keys
-      WHERE username = $1
-      LIMIT 1
-      `,
-      [
-        String(
-          username
-        ).toLowerCase()
-      ]
-    );
-
-
-  if (
-    !result.rows.length
-  ) {
-    return null;
-  }
-
-
-  return result.rows[0].public_key;
-
-}
-
-
-// ==================================================
-// SAVE PUBLIC KEY
-// ==================================================
-
-async function savePublicKey(
-  username,
-  publicKey
-) {
-
-  if (!pool) {
-    return;
-  }
-
-
-  await pool.query(
-    `
-    INSERT INTO chat_public_keys
-      (
-        username,
-        public_key,
-        updated_at
-      )
-    VALUES
-      (
-        $1,
-        $2::jsonb,
-        NOW()
-      )
-    ON CONFLICT (username)
-    DO UPDATE SET
-      public_key = EXCLUDED.public_key,
-      updated_at = NOW()
-    `,
-    [
-      String(
-        username
-      ).toLowerCase(),
-
-      JSON.stringify(
-        publicKey
-      )
-    ]
-  );
-
-}
-
-
-// ==================================================
-// KEY BUNDLE HELPERS
-// ==================================================
-
-async function getKeyBundle(roomId) {
-
-  if (!pool) {
-    return null;
-  }
-
-  const result = await pool.query(
-    `
-    SELECT
-      ciphertext,
-      iv
-    FROM chat_key_bundle
-    WHERE room_id = $1
-    LIMIT 1
-    `,
-    [roomId]
-  );
-
-  if (!result.rows.length) {
-    return null;
-  }
-
-  return {
-    ciphertext: result.rows[0].ciphertext,
-    iv: result.rows[0].iv
-  };
-}
-
-
-async function saveKeyBundle(roomId, bundle) {
-
-  if (!pool) {
-    return false;
-  }
-
-  const result = await pool.query(
-    `
-    INSERT INTO chat_key_bundle
-      (
-        room_id,
-        ciphertext,
-        iv
-      )
-    VALUES
-      (
-        $1,
-        $2,
-        $3
-      )
-    ON CONFLICT (room_id)
-    DO NOTHING
-    `,
-    [
-      roomId,
-      bundle.ciphertext,
-      bundle.iv
-    ]
-  );
-
-  return result.rowCount > 0;
 }
 
 
@@ -1000,39 +646,6 @@ io.on(
   (socket) => {
 
 
-    /* ==================================================
-       SAVE PUSH SUBSCRIPTION
-    ================================================== */
-
-    socket.on(
-      "pushSubscription",
-      (subscription) => {
-
-        if (!socket.data.authenticated) {
-          return;
-        }
-
-        if (!isValidPushSubscription(subscription)) {
-          return;
-        }
-
-        const username =
-          String(socket.data.name).toLowerCase();
-
-        pushSubscriptions.set(
-          username,
-          subscription
-        );
-
-        console.log(
-          "Push subscription saved:",
-          username
-        );
-
-      }
-    );
-
-
     // ==================================================
     // JOIN ROOM
     // ==================================================
@@ -1268,97 +881,6 @@ io.on(
 
 
         // ==================================================
-        // SEND PEER PUBLIC KEY
-        //
-        // IMPORTANT:
-        // This key comes from DB, so peer does NOT
-        // need to be online.
-        // ==================================================
-
-        const peerName =
-          getPeerName(
-            name
-          );
-
-
-        if (peerName) {
-
-          try {
-
-            const peerKey =
-              await getStoredPublicKey(
-                peerName
-              );
-
-
-            if (peerKey) {
-
-              socket.emit(
-                "peerPublicKey",
-                {
-                  name:
-                    peerName,
-
-                  key:
-                    peerKey
-                }
-              );
-
-            }
-
-          } catch (error) {
-
-            console.error(
-              "Public key load error:",
-              error.message
-            );
-
-          }
-
-        }
-
-
-        // ==================================================
-        // ASK CLIENT FOR ITS PUBLIC KEY
-        // ==================================================
-
-        socket.emit(
-          "requestPublicKey"
-        );
-
-
-        // ==================================================
-        // SEND SHARED KEY BUNDLE
-        // ==================================================
-
-        try {
-
-          const keyBundle =
-            await getKeyBundle(
-              PRIVATE_ROOM_ID
-            );
-
-          socket.emit(
-            "keyBundle",
-            keyBundle
-          );
-
-        } catch (error) {
-
-          console.error(
-            "Key bundle load error:",
-            error.message
-          );
-
-          socket.emit(
-            "keyBundle",
-            null
-          );
-
-        }
-
-
-        // ==================================================
         // LOAD CHAT HISTORY
         // ==================================================
 
@@ -1402,61 +924,42 @@ io.on(
                 ]
               );
 
-            const encryptedHistory =
+            const history =
               result.rows
-                .filter(
-                  row =>
-                    row.ciphertext &&
-                    row.iv
-                )
                 .map(
                   row => ({
                     id:
-                      String(
-                        row.id
-                      ),
+                      String(row.id),
 
                     name:
                       row.sender,
 
-                    ciphertext:
-                      row.ciphertext,
-
-                    iv:
-                      row.iv,
+                    text:
+                      row.message || "",
 
                     replyToId:
                       row.reply_to_id
-                        ? String(
-                          row.reply_to_id
-                        )
+                        ? String(row.reply_to_id)
                         : null,
 
                     deliveredAt:
                       row.delivered_at
-                        ? new Date(
-                          row.delivered_at
-                        ).toISOString()
+                        ? new Date(row.delivered_at).toISOString()
                         : null,
 
                     readAt:
                       row.read_at
-                        ? new Date(
-                          row.read_at
-                        ).toISOString()
+                        ? new Date(row.read_at).toISOString()
                         : null,
 
                     time:
-                      new Date(
-                        row.created_at
-                      ).toISOString()
+                      new Date(row.created_at).toISOString()
                   })
                 );
 
-
             socket.emit(
               "history",
-              encryptedHistory
+              history
             );
 
 
@@ -1875,9 +1378,11 @@ io.on(
 
 
         if (
-          !isValidEncryptedMessage(
-            data
-          )
+          !data ||
+          typeof data !== "object" ||
+          typeof data.text !== "string" ||
+          !data.text.trim() ||
+          data.text.length > 2000
         ) {
           return;
         }
@@ -1968,8 +1473,6 @@ io.on(
                     room_id,
                     sender,
                     message,
-                    ciphertext,
-                    iv,
                     reply_to_id,
                     delivered_at,
                     read_at
@@ -1978,10 +1481,8 @@ io.on(
                   (
                     $1,
                     $2,
-                    NULL,
                     $3,
                     $4,
-                    $5,
                     NULL,
                     NULL
                   )
@@ -1992,8 +1493,7 @@ io.on(
                 [
                   roomId,
                   name,
-                  data.ciphertext,
-                  data.iv,
+                  data.text.trim(),
                   replyToId
                 ]
               );
@@ -2036,17 +1536,12 @@ io.on(
 
           name,
 
-          ciphertext:
-            data.ciphertext,
-
-          iv:
-            data.iv,
+          text:
+            data.text.trim(),
 
           replyToId:
             replyToId
-              ? String(
-                replyToId
-              )
+              ? String(replyToId)
               : null,
 
           time:
@@ -2069,23 +1564,6 @@ io.on(
           "message",
           payload
         );
-
-
-        /* ==================================================
-           SEND MOBILE PUSH NOTIFICATION
-        ================================================== */
-
-        const notificationPeer =
-          getPeerName(name);
-
-        if (notificationPeer) {
-
-          await sendPushNotification(
-            notificationPeer,
-            name
-          );
-
-        }
 
 
         // ==================================================
@@ -2656,25 +2134,6 @@ io.on(
         }
 
       }
-    );
-
-  }
-);
-
-// ==================================================
-// SERVICE WORKER
-// ==================================================
-
-app.get(
-  "/sw.js",
-  (_, res) => {
-
-    res.sendFile(
-      path.join(
-        clientDist,
-        "assets",
-        "sw.js"
-      )
     );
 
   }

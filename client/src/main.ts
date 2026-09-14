@@ -9,15 +9,13 @@ import { io, Socket } from 'socket.io-client';
 // MESSAGE TYPES
 // ==================================================
 
-interface EncryptedMessage {
+interface ChatMessageData {
   id?: string;
   name: string;
-  ciphertext: string;
-  iv: string;
+  message?: string;
+  text?: string;
   time: string;
-  mine?: boolean;
   replyToId?: string | null;
-
   deliveredAt?: string | null;
   readAt?: string | null;
 }
@@ -41,10 +39,6 @@ interface ChatMessage {
   readAt?: string | null;
 }
 
-interface PublicKeyData {
-  name: string;
-  key: JsonWebKey;
-}
 
 interface PresenceData {
   name: string;
@@ -56,12 +50,6 @@ interface MessageReceiptData {
   id: string;
 }
 
-interface KeyBundleData {
-  ciphertext: string;
-  iv: string;
-  deliveredAt?: string | null;
-  readAt?: string | null;
-}
 
 
 // ==================================================
@@ -148,15 +136,6 @@ interface KeyBundleData {
     </span>
 
   </div>
-
-  <button
-    type="button"
-    class="notification-btn"
-    (click)="enableNotifications()"
-    title="Enable notifications"
-  >
-    🔔
-  </button>
 
 </header>
 
@@ -331,7 +310,7 @@ interface KeyBundleData {
 
           <button
             type="submit"
-            [disabled]="!draft.trim() || !online() || !encryptionReady()"
+            [disabled]="!draft.trim() || !online()"
             aria-label="Send"
           >
             ↑
@@ -348,79 +327,6 @@ interface KeyBundleData {
 
   styles: [`
 
-    /* ==============================================
-   NOTIFICATION BUTTON
-============================================== */
-
-.notification-btn {
-  width: 38px;
-  height: 38px;
-
-  padding: 0;
-  margin: 0;
-
-  border: 0;
-  border-radius: 12px;
-
-  background: transparent;
-  color: #8d6875;
-
-  font-size: 18px;
-
-  display: grid;
-  place-items: center;
-
-  flex: 0 0 38px;
-
-  position: relative;
-  z-index: 20;
-
-  cursor: pointer;
-
-  box-shadow: none;
-}
-
-.notification-btn::before {
-  display: none;
-}
-
-.notification-btn:hover {
-  background: #f8e8ed;
-  color: #c05270;
-
-  transform: scale(1.06);
-
-  box-shadow: none;
-}
-
-.notification-btn:active {
-  transform: scale(.94);
-}
-
-
-/* ==============================================
-   MOBILE NOTIFICATION BUTTON
-============================================== */
-
-@media (max-width: 600px) {
-
-  .notification-btn {
-    display: grid !important;
-
-    visibility: visible !important;
-
-    opacity: 1 !important;
-
-    width: 38px;
-    height: 38px;
-
-    flex: 0 0 38px;
-
-    position: relative;
-    z-index: 100;
-  }
-
-}
 
     /* ==============================================
        LOGIN ERROR
@@ -610,16 +516,6 @@ export class AppComponent implements OnDestroy {
   ];
 
 
-  // ==================================================
-  // E2E STORAGE
-  // ==================================================
-
-  private readonly privateKeyStorage =
-    'couple-chat-e2e-private-key';
-
-  private readonly publicKeyStorage =
-    'couple-chat-e2e-public-key';
-
 
   // ==================================================
   // STATE
@@ -629,7 +525,6 @@ export class AppComponent implements OnDestroy {
 
   online = signal(false);
 
-  encryptionReady = signal(false);
 
   typing = signal('');
 
@@ -678,9 +573,6 @@ export class AppComponent implements OnDestroy {
   private reconnectTimer?:
     ReturnType<typeof setTimeout>;
 
-  // Web Push state
-  private pushEnabled = false;
-
 
   // ==================================================
   // LONG PRESS
@@ -692,39 +584,9 @@ export class AppComponent implements OnDestroy {
   private longPressTriggered = false;
 
 
-  // ==================================================
-  // E2E KEYS
-  // ==================================================
-
-  private privateKey?: CryptoKey;
-
-  private publicKey?: CryptoKey;
-
-  private peerPublicKey?: CryptoKey;
-
-  private encryptionKey?: CryptoKey;
-
-  // Same master key is used on every browser/device.
-  // The current ECDH key is used only to migrate the
-  // existing working browser's messages.
-  private masterKey?: CryptoKey;
-
-  private keyBundleResolved = false;
-
-  private keyBundleExists = false;
-
-  private bundleCreationStarted = false;
-
 
   // ==================================================
-  // PENDING DATA
-  // ==================================================
-
-  private pendingHistory?: EncryptedMessage[];
-
-  private pendingMessages: EncryptedMessage[] = [];
-
-
+  // JOIN CHAT
   // ==================================================
   // JOIN CHAT
   // ==================================================
@@ -785,38 +647,7 @@ export class AppComponent implements OnDestroy {
 
     this.loginError.set('');
 
-    this.masterKey = undefined;
-    this.keyBundleResolved = false;
-    this.keyBundleExists = false;
-    this.bundleCreationStarted = false;
-
     this.joined.set(true);
-
-
-    // ==================================================
-    // PREPARE E2E KEYS
-    // ==================================================
-
-    try {
-
-      await this.prepareEncryptionKeys();
-
-    } catch (error) {
-
-      console.error(
-        'E2E key setup failed:',
-        error
-      );
-
-      this.joined.set(false);
-
-      this.loginError.set(
-        'Secure encryption could not be initialized.'
-      );
-
-      return;
-    }
-
 
     // ==================================================
     // SOCKET CONNECTION
@@ -864,19 +695,6 @@ export class AppComponent implements OnDestroy {
 
         this.online.set(true);
 
-        this.encryptionReady.set(false);
-
-        this.masterKey = undefined;
-        this.keyBundleResolved = false;
-        this.keyBundleExists = false;
-        this.bundleCreationStarted = false;
-
-        this.peerPublicKey =
-          undefined;
-
-        this.encryptionKey =
-          undefined;
-
         this.socket?.emit(
           'join',
           {
@@ -905,215 +723,9 @@ export class AppComponent implements OnDestroy {
 
         this.online.set(false);
 
-        this.encryptionReady.set(false);
-
-        this.encryptionKey =
-          undefined;
-
-        this.masterKey =
-          undefined;
-
-        this.keyBundleResolved =
-          false;
-
-        this.keyBundleExists =
-          false;
-
-        this.peerPublicKey =
-          undefined;
-
       }
     );
 
-
-    // ==================================================
-    // SERVER REQUESTED OUR PUBLIC KEY
-    // ==================================================
-
-    this.socket.on(
-      'requestPublicKey',
-      async () => {
-
-        try {
-
-          await this.sendPublicKey();
-
-
-          // Ask server for saved peer key.
-          this.socket?.emit(
-            'requestPeerKey'
-          );
-
-
-        } catch (error) {
-
-          console.error(
-            'Public key send failed:',
-            error
-          );
-
-        }
-
-      }
-    );
-
-
-    // ==================================================
-    // SHARED KEY BUNDLE
-    // ==================================================
-
-    this.socket.on(
-      'keyBundle',
-      async (
-        bundle: KeyBundleData | null
-      ) => {
-
-        this.keyBundleResolved = true;
-
-        if (!bundle) {
-
-          this.keyBundleExists = false;
-
-          await this.useLegacyKeyIfReady();
-
-          return;
-        }
-
-        this.keyBundleExists = true;
-
-        try {
-
-          const master =
-            await this.unwrapMasterKey(
-              bundle
-            );
-
-          this.masterKey =
-            master;
-
-          this.encryptionKey =
-            master;
-
-          this.encryptionReady.set(
-            true
-          );
-
-          await this.processPendingData();
-
-        } catch (error) {
-
-          console.error(
-            'Shared key unlock failed:',
-            error
-          );
-
-          this.encryptionReady.set(
-            false
-          );
-
-          this.loginError.set(
-            'Unable to unlock the chat. Check the passcode.'
-          );
-
-        }
-
-      }
-    );
-
-
-    // ==================================================
-    // PEER PUBLIC KEY
-    // ==================================================
-
-    this.socket.on(
-      'peerPublicKey',
-      async (
-        data: PublicKeyData
-      ) => {
-
-        try {
-
-          if (
-            !data ||
-            !data.key ||
-            !data.name
-          ) {
-            return;
-          }
-
-
-          // Ignore our own key.
-          if (
-            data.name.toLowerCase() ===
-            this.name.toLowerCase()
-          ) {
-            return;
-          }
-
-
-          this.peerPublicKey =
-            await crypto.subtle.importKey(
-              'jwk',
-              data.key,
-              {
-                name:
-                  'ECDH',
-
-                namedCurve:
-                  'P-256'
-              },
-              true,
-              []
-            );
-
-
-          await this.deriveEncryptionKey();
-
-          await this.useLegacyKeyIfReady();
-
-
-        } catch (error) {
-
-          console.error(
-            'Peer key error:',
-            error
-          );
-
-          this.encryptionReady.set(
-            false
-          );
-
-          this.encryptionKey =
-            undefined;
-
-        }
-
-      }
-    );
-
-
-    // ==================================================
-    // KEY BUNDLE SAVED
-    // ==================================================
-
-    this.socket.on(
-      'keyBundleSaved',
-      (
-        data: {
-          success?: boolean;
-          existing?: boolean;
-        }
-      ) => {
-
-        if (data?.success) {
-          this.keyBundleExists = true;
-        }
-
-        this.bundleCreationStarted =
-          false;
-
-      }
-    );
 
 
     // ==================================================
@@ -1122,23 +734,11 @@ export class AppComponent implements OnDestroy {
 
     this.socket.on(
       'history',
-      async (
-        history: EncryptedMessage[]
+      (
+        history: ChatMessageData[]
       ) => {
 
-        if (!this.encryptionKey) {
-
-          this.pendingHistory =
-            history;
-
-          return;
-
-        }
-
-
-        await this.processHistory(
-          history
-        );
+        this.processHistory(history);
 
       }
     );
@@ -1150,24 +750,11 @@ export class AppComponent implements OnDestroy {
 
     this.socket.on(
       'message',
-      async (
-        message: EncryptedMessage
+      (
+        message: ChatMessageData
       ) => {
 
-        if (!this.encryptionKey) {
-
-          this.pendingMessages.push(
-            message
-          );
-
-          return;
-
-        }
-
-
-        await this.processIncomingMessage(
-          message
-        );
+        this.processIncomingMessage(message);
 
       }
     );
@@ -1434,21 +1021,7 @@ export class AppComponent implements OnDestroy {
 
         this.peerOnline.set(false);
 
-        this.encryptionReady.set(
-          false
-        );
 
-        this.encryptionKey =
-          undefined;
-
-        this.peerPublicKey =
-          undefined;
-
-        this.pendingHistory =
-          undefined;
-
-        this.pendingMessages =
-          [];
 
 
         this.loginError.set(
@@ -1469,159 +1042,91 @@ export class AppComponent implements OnDestroy {
   // PROCESS INCOMING MESSAGE
   // ==================================================
 
-  private async processIncomingMessage(
-    message: EncryptedMessage
+  private processIncomingMessage(
+    message: ChatMessageData
   ) {
 
-    if (!this.encryptionKey) {
+    const mine =
+      message.name.toLowerCase() ===
+      this.name.toLowerCase();
 
-      this.pendingMessages.push(
-        message
+    const text =
+      typeof message.message === 'string'
+        ? message.message
+        : (message.text || '');
+
+    const replyTo =
+      message.replyToId
+        ? this.findMessageById(
+          message.replyToId
+        )
+        : null;
+
+    const chatMessage: ChatMessage = {
+
+      id:
+        message.id,
+
+      name:
+        message.name,
+
+      text,
+
+      time:
+        message.time,
+
+      mine,
+
+      replyToId:
+        message.replyToId || null,
+
+      replyTo,
+
+      status:
+        mine
+          ? 'sent'
+          : 'delivered',
+
+      deliveredAt:
+        mine
+          ? null
+          : new Date().toISOString(),
+
+      readAt:
+        mine
+          ? null
+          : new Date().toISOString()
+
+    };
+
+    this.messages.update(
+      list => [
+        ...list,
+        chatMessage
+      ]
+    );
+
+    this.scrollSoon();
+
+    if (
+      !mine &&
+      message.id
+    ) {
+
+      this.socket?.emit(
+        'messageDelivered',
+        {
+          id:
+            message.id
+        }
       );
 
-      return;
-
-    }
-
-
-    try {
-
-      const decrypted =
-        await this.decryptMessage(
-          message.ciphertext,
-          message.iv
-        );
-
-
-      const parsed =
-        this.parseDecryptedMessage(
-          decrypted
-        );
-
-
-      const mine =
-        message.name.toLowerCase() ===
-        this.name.toLowerCase();
-
-      // ==================================================
-      // SHOW BROWSER NOTIFICATION
-      // ==================================================
-
-      if (
-        !mine &&
-        'Notification' in window &&
-        Notification.permission === 'granted' &&
-        document.visibilityState !== 'visible' &&
-        !this.pushEnabled
-      ) {
-
-        new Notification(
-          `${message.name} ❤️`,
-          {
-            body:
-              parsed.text,
-
-            icon:
-              '/favicon.ico'
-          }
-        );
-
-      }
-
-      const replyTo =
-        parsed.replyToId
-          ? this.findMessageById(
-            parsed.replyToId
-          )
-          : null;
-
-
-      const chatMessage: ChatMessage = {
-
-        id:
-          message.id,
-
-        name:
-          message.name,
-
-        text:
-          parsed.text,
-
-        time:
-          message.time,
-
-        mine,
-
-        replyToId:
-          parsed.replyToId,
-
-        replyTo,
-
-        status:
-          mine
-            ? 'sent'
-            : 'delivered',
-
-        deliveredAt:
-          mine
-            ? null
-            : new Date().toISOString(),
-
-        readAt:
-          mine
-            ? null
-            : new Date().toISOString()
-
-      };
-
-
-      this.messages.update(
-        list => [
-          ...list,
-          chatMessage
-        ]
-      );
-
-
-      this.scrollSoon();
-
-
-      // ==================================================
-      // DELIVERED RECEIPT
-      // ==================================================
-
-      if (
-        !mine &&
-        message.id
-      ) {
-
-        this.socket?.emit(
-          'messageDelivered',
-          {
-            id:
-              message.id
-          }
-        );
-
-
-        // Message is visible immediately,
-        // so mark it as read.
-        this.socket?.emit(
-          'messageRead',
-          {
-            id:
-              message.id
-          }
-        );
-
-      }
-
-
-    } catch (error) {
-
-      console.error(
-        'Incoming message decryption failed:',
-        error
+      this.socket?.emit(
+        'messageRead',
+        {
+          id:
+            message.id
+        }
       );
 
     }
@@ -1630,141 +1135,70 @@ export class AppComponent implements OnDestroy {
 
 
   // ==================================================
-  // PROCESS / DECRYPT HISTORY
+  // PROCESS HISTORY
   // ==================================================
 
-  private async processHistory(
-    history: EncryptedMessage[]
+  private processHistory(
+    history: ChatMessageData[]
   ) {
 
-    if (!this.encryptionKey) {
+    const chatMessages: ChatMessage[] =
+      history.map(
+        message => {
 
-      this.pendingHistory =
-        history;
-
-      return;
-
-    }
-
-
-    const decrypted:
-      ChatMessage[] = [];
-
-    let decryptFailed =
-      false;
-
-
-    for (
-      const message of history
-    ) {
-
-      try {
-
-        const decryptedText =
-          await this.decryptMessage(
-            message.ciphertext,
-            message.iv
-          );
-
-
-        const parsed =
-          this.parseDecryptedMessage(
-            decryptedText
-          );
-
-
-        const mine =
-          message.name.toLowerCase() ===
-          this.name.toLowerCase();
-
-
-        decrypted.push({
-
-          id:
-            message.id,
-
-          name:
-            message.name,
-
-          text:
-            parsed.text,
-
-          time:
-            message.time,
-
-          mine,
-
-          replyToId:
-            parsed.replyToId,
-
-          replyTo:
-            null,
-
-          deliveredAt:
-            message.deliveredAt || null,
-
-          readAt:
-            message.readAt || null,
-
-          status:
-            mine
-              ? (
-                message.readAt
-                  ? 'read'
-                  : message.deliveredAt
-                    ? 'delivered'
-                    : 'sent'
-              )
-              : 'read'
-
-        });
-
-
-      } catch (error) {
-
-        decryptFailed =
-          true;
-
-        console.error(
-          'Message decryption failed:',
-          error
-        );
-
-
-        decrypted.push({
-
-          id:
-            message.id,
-
-          name:
-            message.name,
-
-          text:
-            '[Unable to decrypt this message]',
-
-          time:
-            message.time,
-
-          mine:
+          const mine =
             message.name.toLowerCase() ===
-            this.name.toLowerCase(),
+            this.name.toLowerCase();
 
-          status:
-            'sent'
+          return {
 
-        });
+            id:
+              message.id,
 
-      }
+            name:
+              message.name,
 
-    }
+            text:
+              typeof message.message === 'string'
+                ? message.message
+                : (message.text || ''),
 
+            time:
+              message.time,
 
-    // ==================================================
-    // RESOLVE REPLIES AFTER ALL MESSAGES EXIST
-    // ==================================================
+            mine,
 
+            replyToId:
+              message.replyToId || null,
+
+            replyTo:
+              null,
+
+            deliveredAt:
+              message.deliveredAt || null,
+
+            readAt:
+              message.readAt || null,
+
+            status:
+              mine
+                ? (
+                  message.readAt
+                    ? 'read'
+                    : message.deliveredAt
+                      ? 'delivered'
+                      : 'sent'
+                )
+                : 'read'
+
+          };
+
+        }
+      );
+
+    // Resolve replies after all messages exist.
     for (
-      const message of decrypted
+      const message of chatMessages
     ) {
 
       if (
@@ -1772,7 +1206,7 @@ export class AppComponent implements OnDestroy {
       ) {
 
         message.replyTo =
-          decrypted.find(
+          chatMessages.find(
             original =>
               original.id ===
               message.replyToId
@@ -1782,21 +1216,15 @@ export class AppComponent implements OnDestroy {
 
     }
 
-
     this.messages.set(
-      decrypted
+      chatMessages
     );
-
 
     this.scrollSoon();
 
-
-    // ==================================================
-    // MARK RECEIVED HISTORY AS READ
-    // ==================================================
-
+    // Mark received history as read.
     for (
-      const message of decrypted
+      const message of chatMessages
     ) {
 
       if (
@@ -1812,7 +1240,6 @@ export class AppComponent implements OnDestroy {
           }
         );
 
-
         this.socket?.emit(
           'messageRead',
           {
@@ -1825,1061 +1252,52 @@ export class AppComponent implements OnDestroy {
 
     }
 
-
-    // One-time migration: only create the shared bundle
-    // if the current device successfully decrypted every
-    // existing encrypted message.
-    // Migration is triggered as soon as the legacy key is ready.
-    // Keep this history check only as a safety log.
-    if (
-      decryptFailed &&
-      !this.keyBundleExists
-    ) {
-      console.warn(
-        'Some history messages could not be decrypted; shared key bundle was not created from this history pass.'
-      );
-    }
-
   }
 
-
-  // ==================================================
-  // PARSE DECRYPTED MESSAGE
-  //
-  // New messages:
-  // {
-  //   text: "...",
-  //   replyToId: "..."
-  // }
-  //
-  // Also supports old E2E messages that
-  // contained only plain text.
-  // ==================================================
-
-  private parseDecryptedMessage(
-    value: string
-  ): {
-    text: string;
-    replyToId: string | null;
-  } {
-
-    try {
-
-      const parsed =
-        JSON.parse(value);
-
-
-      if (
-        parsed &&
-        typeof parsed.text ===
-        'string'
-      ) {
-
-        return {
-
-          text:
-            parsed.text,
-
-          replyToId:
-            typeof parsed.replyToId ===
-              'string'
-              ? parsed.replyToId
-              : null
-
-        };
-
-      }
-
-    } catch {
-      // Old encrypted message.
-      // Treat it as normal text.
-    }
-
-
-    return {
-
-      text:
-        value,
-
-      replyToId:
-        null
-
-    };
-
-  }
-
-
-  // ==================================================
-  // E2E KEY PREPARATION
-  // ==================================================
-
-  private async prepareEncryptionKeys() {
-
-    const savedPrivateKey =
-      localStorage.getItem(
-        this.privateKeyStorage
-      );
-
-
-    const savedPublicKey =
-      localStorage.getItem(
-        this.publicKeyStorage
-      );
-
-
-    // ==================================================
-    // RESTORE EXISTING KEY PAIR
-    // ==================================================
-
-    if (
-      savedPrivateKey &&
-      savedPublicKey
-    ) {
-
-      const privateJwk =
-        JSON.parse(
-          savedPrivateKey
-        );
-
-
-      const publicJwk =
-        JSON.parse(
-          savedPublicKey
-        );
-
-
-      this.privateKey =
-        await crypto.subtle.importKey(
-          'jwk',
-          privateJwk,
-          {
-            name:
-              'ECDH',
-
-            namedCurve:
-              'P-256'
-          },
-          true,
-          [
-            'deriveKey'
-          ]
-        );
-
-
-      this.publicKey =
-        await crypto.subtle.importKey(
-          'jwk',
-          publicJwk,
-          {
-            name:
-              'ECDH',
-
-            namedCurve:
-              'P-256'
-          },
-          true,
-          []
-        );
-
-
-      return;
-
-    }
-
-
-    // ==================================================
-    // GENERATE NEW KEY PAIR
-    // ==================================================
-
-    const keyPair =
-      await crypto.subtle.generateKey(
-        {
-          name:
-            'ECDH',
-
-          namedCurve:
-            'P-256'
-        },
-
-        true,
-
-        [
-          'deriveKey',
-          'deriveBits'
-        ]
-      );
-
-
-    this.privateKey =
-      keyPair.privateKey;
-
-
-    this.publicKey =
-      keyPair.publicKey;
-
-
-    const privateJwk =
-      await crypto.subtle.exportKey(
-        'jwk',
-        keyPair.privateKey
-      );
-
-
-    const publicJwk =
-      await crypto.subtle.exportKey(
-        'jwk',
-        keyPair.publicKey
-      );
-
-
-    localStorage.setItem(
-      this.privateKeyStorage,
-      JSON.stringify(
-        privateJwk
-      )
-    );
-
-
-    localStorage.setItem(
-      this.publicKeyStorage,
-      JSON.stringify(
-        publicJwk
-      )
-    );
-
-  }
-
-
-  // ==================================================
-  // SEND PUBLIC KEY
-  // ==================================================
-
-  private async sendPublicKey() {
-
-    if (
-      !this.socket ||
-      !this.publicKey
-    ) {
-      return;
-    }
-
-
-    const jwk =
-      await crypto.subtle.exportKey(
-        'jwk',
-        this.publicKey
-      );
-
-
-    this.socket.emit(
-      'publicKey',
-      {
-        name:
-          this.name,
-
-        key:
-          jwk
-      }
-    );
-
-  }
-
-
-  // ==================================================
-  // DERIVE SHARED ENCRYPTION KEY
-  // ==================================================
-
-  private async deriveEncryptionKey() {
-
-    if (
-      !this.privateKey ||
-      !this.peerPublicKey
-    ) {
-
-      throw new Error(
-        'E2E keys are not available.'
-      );
-
-    }
-
-
-    this.encryptionKey =
-      await crypto.subtle.deriveKey(
-        {
-          name:
-            'ECDH',
-
-          public:
-            this.peerPublicKey
-        },
-
-        this.privateKey,
-
-        {
-          name:
-            'AES-GCM',
-
-          length:
-            256
-        },
-
-        true,
-
-        [
-          'encrypt',
-          'decrypt'
-        ]
-      );
-
-  }
-
-
-  // ==================================================
-  // USE LEGACY KEY / PROCESS PENDING DATA
-  // ==================================================
-
-  private async useLegacyKeyIfReady() {
-
-    if (
-      !this.keyBundleResolved ||
-      this.keyBundleExists ||
-      !this.encryptionKey
-    ) {
-      return;
-    }
-
-    this.masterKey =
-      this.encryptionKey;
-
-    this.encryptionReady.set(
-      true
-    );
-
-    // Create the device-independent bundle immediately.
-    // Do not wait for history processing: the current browser
-    // is already using this legacy ECDH key successfully.
-    await this.createKeyBundleFromLegacyKey();
-
-    await this.processPendingData();
-
-  }
-
-
-  private async processPendingData() {
-
-    if (!this.encryptionKey) {
-      return;
-    }
-
-    if (this.pendingHistory) {
-
-      const history =
-        this.pendingHistory;
-
-      this.pendingHistory =
-        undefined;
-
-      await this.processHistory(
-        history
-      );
-
-    }
-
-    if (
-      this.pendingMessages.length
-    ) {
-
-      const pending =
-        [
-          ...this.pendingMessages
-        ];
-
-      this.pendingMessages =
-        [];
-
-      for (
-        const message of pending
-      ) {
-
-        await this.processIncomingMessage(
-          message
-        );
-
-      }
-
-    }
-
-  }
-
-
-  // ==================================================
-  // PASSWORD -> WRAPPING KEY
-  //
-  // Password remains inside the browser.
-  // PBKDF2 is only used to protect the master key bundle.
-  // ==================================================
-
-  private async derivePasswordKey(
-    salt: Uint8Array
-  ): Promise<CryptoKey> {
-
-    const passwordBytes =
-      new TextEncoder().encode(
-        this.passcode
-      );
-
-    const passwordKey =
-      await crypto.subtle.importKey(
-        'raw',
-        passwordBytes,
-        'PBKDF2',
-        false,
-        ['deriveKey']
-      );
-
-    return crypto.subtle.deriveKey(
-      {
-        name:
-          'PBKDF2',
-
-        salt,
-
-        iterations:
-          310000,
-
-        hash:
-          'SHA-256'
-      },
-
-      passwordKey,
-
-      {
-        name:
-          'AES-GCM',
-
-        length:
-          256
-      },
-
-      false,
-
-      [
-        'encrypt',
-        'decrypt'
-      ]
-    );
-
-  }
-
-
-  private async createKeyBundleFromLegacyKey() {
-
-    if (
-      this.bundleCreationStarted ||
-      this.keyBundleExists ||
-      !this.encryptionKey ||
-      !this.socket ||
-      !this.passcode
-    ) {
-      return;
-    }
-
-    this.bundleCreationStarted =
-      true;
-
-    try {
-
-      const masterRaw =
-        await crypto.subtle.exportKey(
-          'raw',
-          this.encryptionKey
-        );
-
-      const salt =
-        new Uint8Array(
-          await crypto.subtle.digest(
-            'SHA-256',
-            new TextEncoder().encode(
-              this.roomId
-            )
-          )
-        ).slice(0, 16);
-
-      const wrappingKey =
-        await this.derivePasswordKey(
-          salt
-        );
-
-      const iv =
-        crypto.getRandomValues(
-          new Uint8Array(12)
-        );
-
-      const wrapped =
-        await crypto.subtle.encrypt(
-          {
-            name:
-              'AES-GCM',
-
-            iv
-          },
-
-          wrappingKey,
-
-          masterRaw
-        );
-
-      this.socket.emit(
-        'saveKeyBundle',
-        {
-          ciphertext:
-            this.arrayBufferToBase64(
-              wrapped
-            ),
-
-          iv:
-            this.arrayBufferToBase64(
-              iv
-            )
-        }
-      );
-
-    } catch (error) {
-
-      console.error(
-        'Master key migration failed:',
-        error
-      );
-
-      this.bundleCreationStarted =
-        false;
-
-    }
-
-  }
-
-
-  private async unwrapMasterKey(
-    bundle: KeyBundleData
-  ): Promise<CryptoKey> {
-
-    const salt =
-      new Uint8Array(
-        await crypto.subtle.digest(
-          'SHA-256',
-          new TextEncoder().encode(
-            this.roomId
-          )
-        )
-      ).slice(0, 16);
-
-    const wrappingKey =
-      await this.derivePasswordKey(
-        salt
-      );
-
-    const iv =
-      this.base64ToUint8Array(
-        bundle.iv
-      );
-
-    const wrapped =
-      this.base64ToUint8Array(
-        bundle.ciphertext
-      );
-
-    const raw =
-      await crypto.subtle.decrypt(
-        {
-          name:
-            'AES-GCM',
-
-          iv
-        },
-
-        wrappingKey,
-
-        wrapped
-      );
-
-    return crypto.subtle.importKey(
-      'raw',
-      raw,
-      {
-        name:
-          'AES-GCM'
-      },
-      true,
-      [
-        'encrypt',
-        'decrypt'
-      ]
-    );
-
-  }
-
-
-  // ==================================================
-  // ENCRYPT MESSAGE
-  // ==================================================
-
-  private async encryptMessage(
-    text: string,
-    replyToId:
-      string | null
-  ): Promise<{
-    ciphertext: string;
-    iv: string;
-  }> {
-
-    const key =
-      this.masterKey ||
-      this.encryptionKey;
-
-    if (!key) {
-
-      throw new Error(
-        'Encryption key is not ready.'
-      );
-
-    }
-
-
-    const iv =
-      crypto.getRandomValues(
-        new Uint8Array(12)
-      );
-
-
-    // ==================================================
-    // Encrypt both text + reply reference.
-    //
-    // Server cannot read either.
-    // ==================================================
-
-    const payload = {
-
-      text,
-
-      replyToId
-
-    };
-
-
-    const encoded =
-      new TextEncoder().encode(
-        JSON.stringify(
-          payload
-        )
-      );
-
-
-    const encrypted =
-      await crypto.subtle.encrypt(
-        {
-          name:
-            'AES-GCM',
-
-          iv
-        },
-
-        key,
-
-        encoded
-      );
-
-
-    return {
-
-      ciphertext:
-        this.arrayBufferToBase64(
-          encrypted
-        ),
-
-      iv:
-        this.arrayBufferToBase64(
-          iv
-        )
-
-    };
-
-  }
-
-
-  // ==================================================
-  // DECRYPT MESSAGE
-  // ==================================================
-
-  private async decryptMessage(
-    ciphertext: string,
-    iv: string
-  ): Promise<string> {
-
-    const key =
-      this.masterKey ||
-      this.encryptionKey;
-
-    if (!key) {
-
-      throw new Error(
-        'Encryption key is not ready.'
-      );
-
-    }
-
-
-    const encrypted =
-      this.base64ToUint8Array(
-        ciphertext
-      );
-
-
-    const initializationVector =
-      this.base64ToUint8Array(
-        iv
-      );
-
-
-    const decrypted =
-      await crypto.subtle.decrypt(
-        {
-          name:
-            'AES-GCM',
-
-          iv:
-            initializationVector
-        },
-
-        key,
-
-        encrypted
-      );
-
-
-    return new TextDecoder().decode(
-      decrypted
-    );
-
-  }
-
-
-  // ==================================================
-  // BASE64 HELPERS
-  // ==================================================
-
-  private arrayBufferToBase64(
-    buffer:
-      ArrayBuffer |
-      Uint8Array
-  ): string {
-
-    const bytes =
-      buffer instanceof Uint8Array
-        ? buffer
-        : new Uint8Array(
-          buffer
-        );
-
-
-    let binary = '';
-
-
-    for (
-      const byte of bytes
-    ) {
-
-      binary +=
-        String.fromCharCode(
-          byte
-        );
-
-    }
-
-
-    return btoa(
-      binary
-    );
-
-  }
-
-
-  private base64ToUint8Array(
-    value: string
-  ): Uint8Array {
-
-    const binary =
-      atob(value);
-
-
-    const bytes =
-      new Uint8Array(
-        binary.length
-      );
-
-
-    for (
-      let i = 0;
-      i < binary.length;
-      i++
-    ) {
-
-      bytes[i] =
-        binary.charCodeAt(i);
-
-    }
-
-
-    return bytes;
-
-  }
-
-  // ==================================================
-  // WEB PUSH NOTIFICATIONS
-  // ==================================================
-
-  async enableNotifications() {
-
-    if (!('Notification' in window)) {
-
-      alert(
-        'Your browser does not support notifications.'
-      );
-
-      return;
-
-    }
-
-    if (!('serviceWorker' in navigator)) {
-
-      alert(
-        'Push notifications are not supported in this browser.'
-      );
-
-      return;
-
-    }
-
-    if (!('PushManager' in window)) {
-
-      alert(
-        'Push notifications are not supported in this browser.'
-      );
-
-      return;
-
-    }
-
-    try {
-
-      const permission =
-        await Notification.requestPermission();
-
-      if (permission !== 'granted') {
-
-        alert(
-          'Please allow notifications in your browser settings.'
-        );
-
-        return;
-
-      }
-
-      const registration =
-        await navigator.serviceWorker.register(
-          '/sw.js'
-        );
-
-      let subscription =
-        await registration.pushManager.getSubscription();
-
-      if (!subscription) {
-
-        const vapidPublicKey =
-          'BFUFKOZdPgw_2TuVYiHRkOzA8C9BBLJWYhaAmbILvqnw1OzhYDdzMeADe2KrC36gToeZc1NHJdWaF2o3agUu1WA';
-
-        subscription =
-          await registration.pushManager.subscribe({
-            userVisibleOnly: true,
-
-            applicationServerKey:
-              this.urlBase64ToUint8Array(
-                vapidPublicKey
-              )
-          });
-
-      }
-
-      this.socket?.emit(
-        'pushSubscription',
-        subscription.toJSON()
-      );
-
-      this.pushEnabled = true;
-
-      await registration.showNotification(
-        'Our Little Corner ❤️',
-        {
-          body:
-            'Notifications are enabled.',
-          icon:
-            '/favicon.ico'
-        }
-      );
-
-    } catch (error) {
-
-      console.error(
-        'Push notification setup failed:',
-        error
-      );
-
-      alert(
-        'Could not enable notifications. Please try again.'
-      );
-
-    }
-
-  }
-
-
-  private urlBase64ToUint8Array(
-    value: string
-  ): Uint8Array {
-
-    const padding =
-      '='.repeat(
-        (4 - value.length % 4) % 4
-      );
-
-    const base64 =
-      (
-        value + padding
-      )
-        .replace(/-/g, '+')
-        .replace(/_/g, '/');
-
-    const rawData =
-      atob(base64);
-
-    const output =
-      new Uint8Array(
-        rawData.length
-      );
-
-    for (
-      let i = 0;
-      i < rawData.length;
-      i++
-    ) {
-
-      output[i] =
-        rawData.charCodeAt(i);
-
-    }
-
-    return output;
-
-  }
 
   // ==================================================
   // SEND MESSAGE
   // ==================================================
 
-  async send() {
+  send() {
 
     const text =
       this.draft.trim();
 
-
     if (
       !text ||
       !this.socket ||
-      !this.online() ||
-      !this.encryptionReady()
+      !this.online()
     ) {
       return;
     }
 
+    const reply =
+      this.replyingTo();
 
-    try {
+    const replyToId =
+      reply?.id ||
+      null;
 
-      if (
-        !this.encryptionKey
-      ) {
-
-        this.encryptionReady.set(
-          false
-        );
-
-
-        this.socket.emit(
-          'requestPeerKey'
-        );
-
-
-        return;
-
-      }
-
-
-      // ==================================================
-      // REPLY ID
-      // ==================================================
-
-      const reply =
-        this.replyingTo();
-
-
-      const replyToId =
-        reply?.id ||
-        null;
-
-
-      // ==================================================
-      // ENCRYPT
-      // ==================================================
-
-      const encrypted =
-        await this.encryptMessage(
+    this.socket.emit(
+      'message',
+      {
+        message:
           text,
-          replyToId
-        );
 
+        replyToId
+      }
+    );
 
-      // ==================================================
-      // SEND TO SERVER
-      // ==================================================
+    this.socket.emit(
+      'stopTyping'
+    );
 
-      this.socket.emit(
-        'message',
-        encrypted
-      );
+    this.draft = '';
 
-
-      this.socket.emit(
-        'stopTyping'
-      );
-
-
-      // ==================================================
-      // CLEAR INPUT / REPLY
-      // ==================================================
-
-      this.draft = '';
-
-      this.replyingTo.set(
-        null
-      );
-
-
-    } catch (error) {
-
-      console.error(
-        'Encryption failed:',
-        error
-      );
-
-    }
+    this.replyingTo.set(
+      null
+    );
 
   }
 
