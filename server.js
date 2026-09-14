@@ -193,7 +193,7 @@ async function initDb() {
   if (!pool) {
 
     console.warn(
-      "DATABASE_URL is not set. Chat history and persistent keys will not be saved."
+      "DATABASE_URL is not set. Chat history will not be saved."
     );
 
     return;
