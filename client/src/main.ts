@@ -159,6 +159,17 @@ interface MessageReceiptData {
 
             }
 
+            @if (
+              item.id &&
+              item.id === firstUnreadMessageId
+            ) {
+
+              <div class="unread-divider">
+                <span>Unread messages</span>
+              </div>
+
+            }
+
             @if (item.name === '__system') {
 
               <div class="system">
@@ -368,6 +379,30 @@ interface MessageReceiptData {
 
 
     /* ==============================================
+       UNREAD MESSAGES DIVIDER
+    =============================================== */
+
+    .unread-divider {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      margin: 10px 14px 12px;
+      color: #b34d6d;
+      font-size: 11px;
+      font-weight: 700;
+      white-space: nowrap;
+    }
+
+    .unread-divider::before,
+    .unread-divider::after {
+      content: '';
+      height: 1px;
+      flex: 1;
+      background: rgba(190, 130, 150, .22);
+    }
+
+
+    /* ==============================================
        MESSAGE STATUS
     =============================================== */
 
@@ -534,6 +569,10 @@ export class AppComponent implements OnDestroy {
   loginError = signal('');
 
   messages = signal<ChatMessage[]>([]);
+
+  // First unread message from chat history.
+  // This is detected before history messages are marked as read.
+  private firstUnreadMessageId: string | null = null;
 
 
   // ==================================================
@@ -1144,6 +1183,26 @@ export class AppComponent implements OnDestroy {
   private processHistory(
     history: ChatMessageData[]
   ) {
+
+    // Detect unread messages before emitting read receipts.
+    // The database's read_at value tells us whether the peer
+    // had already read the message before this chat was opened.
+    this.firstUnreadMessageId = null;
+
+    for (const message of history) {
+      const mine =
+        message.name.toLowerCase() ===
+        this.name.toLowerCase();
+
+      if (
+        !mine &&
+        message.id &&
+        !message.readAt
+      ) {
+        this.firstUnreadMessageId = message.id;
+        break;
+      }
+    }
 
     const chatMessages: ChatMessage[] =
       history.map(
