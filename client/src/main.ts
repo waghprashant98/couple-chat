@@ -149,12 +149,15 @@ interface MessageReceiptData {
           (click)="clearReply()"
         >
 
-          <div class="date-pill">
-            Today
-          </div>
-
-
           @for (item of messages(); track item.id || $index) {
+
+            @if (shouldShowDateSeparator(item, $index)) {
+
+              <div class="date-pill">
+                {{ getDateSeparatorText(item.time) }}
+              </div>
+
+            }
 
             @if (item.name === '__system') {
 
@@ -1558,6 +1561,98 @@ export class AppComponent implements OnDestroy {
         });
 
       }
+    );
+
+  }
+
+
+  // ==================================================
+  // DATE SEPARATOR
+  // ==================================================
+
+  shouldShowDateSeparator(
+    message: ChatMessage,
+    index: number
+  ): boolean {
+
+    if (!message.time) {
+      return false;
+    }
+
+    if (index === 0) {
+      return true;
+    }
+
+    const previous = this.messages()[index - 1];
+
+    if (!previous?.time) {
+      return true;
+    }
+
+    return !this.isSameCalendarDay(
+      message.time,
+      previous.time
+    );
+
+  }
+
+
+  getDateSeparatorText(
+    time: string
+  ): string {
+
+    const date = new Date(time);
+
+    if (isNaN(date.getTime())) {
+      return '';
+    }
+
+    const today = new Date();
+    const yesterday = new Date();
+
+    yesterday.setDate(
+      yesterday.getDate() - 1
+    );
+
+    if (this.isSameCalendarDay(time, today.toISOString())) {
+      return 'Today';
+    }
+
+    if (this.isSameCalendarDay(time, yesterday.toISOString())) {
+      return 'Yesterday';
+    }
+
+    return date.toLocaleDateString(
+      'en-IN',
+      {
+        day: 'numeric',
+        month: 'short',
+        year: 'numeric'
+      }
+    );
+
+  }
+
+
+  private isSameCalendarDay(
+    firstTime: string,
+    secondTime: string
+  ): boolean {
+
+    const first = new Date(firstTime);
+    const second = new Date(secondTime);
+
+    if (
+      isNaN(first.getTime()) ||
+      isNaN(second.getTime())
+    ) {
+      return false;
+    }
+
+    return (
+      first.getFullYear() === second.getFullYear() &&
+      first.getMonth() === second.getMonth() &&
+      first.getDate() === second.getDate()
     );
 
   }
