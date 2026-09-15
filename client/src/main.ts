@@ -1583,9 +1583,18 @@ export class AppComponent implements OnDestroy {
       return true;
     }
 
-    const previous = this.messages()[index - 1];
+    let previous: ChatMessage | undefined;
 
-    if (!previous?.time) {
+    for (let i = index - 1; i >= 0; i--) {
+      const candidate = this.messages()[i];
+
+      if (candidate?.time) {
+        previous = candidate;
+        break;
+      }
+    }
+
+    if (!previous) {
       return true;
     }
 
