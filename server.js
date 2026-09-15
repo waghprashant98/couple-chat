@@ -1479,23 +1479,8 @@ FROM (
           );
 
 
-          // Persist both delivery and read timestamps.
-          await pool.query(
-            `
-            UPDATE messages
-            SET
-              delivered_at = COALESCE(delivered_at, NOW()),
-              read_at = COALESCE(read_at, NOW())
-            WHERE id = $1
-              AND room_id = $2
-              AND sender = $3
-            `,
-            [
-              messageId,
-              PRIVATE_ROOM_ID,
-              sender
-            ]
-          );
+          // Read status is handled separately by messageRead.
+          // Delivery alone must not make the message read.
 
 
           // Notify original sender.
@@ -1623,6 +1608,25 @@ FROM (
           ) {
             return;
           }
+
+
+          // Persist read timestamp.
+          await pool.query(
+            `
+            UPDATE messages
+            SET
+              delivered_at = COALESCE(delivered_at, NOW()),
+              read_at = COALESCE(read_at, NOW())
+            WHERE id = $1
+              AND room_id = $2
+              AND sender = $3
+            `,
+            [
+              messageId,
+              PRIVATE_ROOM_ID,
+              sender
+            ]
+          );
 
 
           // Notify original sender.
@@ -1763,6 +1767,8 @@ FROM (
         // socket is still the current session.
         // --------------------------------------------------
 
+        let isCurrentSession = false;
+
         if (name) {
 
           const keyName =
@@ -1780,36 +1786,44 @@ FROM (
             socket.id
           ) {
 
+            isCurrentSession = true;
+
             activeSockets.delete(
               keyName
             );
 
-          }
 
+            // ------------------------------------------------
+            // SAVE LAST SEEN
+            // ------------------------------------------------
 
-          // ------------------------------------------------
-          // SAVE LAST SEEN
-          // ------------------------------------------------
+            try {
 
-          try {
+              await saveLastSeen(
+                keyName
+              );
 
-            await saveLastSeen(
-              keyName
-            );
+            } catch (error) {
 
-          } catch (error) {
+              console.error(
+                "Last seen save error:",
+                error.message
+              );
 
-            console.error(
-              "Last seen save error:",
-              error.message
-            );
+            }
 
           }
 
         }
 
 
-        if (!roomId) {
+        // An old session can disconnect after a new session
+        // has already replaced it. Do not announce that old
+        // session as offline.
+        if (
+          !roomId ||
+          !isCurrentSession
+        ) {
           return;
         }
 

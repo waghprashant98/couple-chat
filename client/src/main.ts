@@ -180,6 +180,7 @@ interface MessageReceiptData {
 
               <div
                 class="row"
+                [attr.data-message-id]="item.id || null"
                 [class.mine]="item.mine"
                 (click)="$event.stopPropagation(); handleMessageClick($event, item)"
               >
@@ -572,7 +573,7 @@ export class AppComponent implements OnDestroy {
 
   // First unread message from chat history.
   // This is detected before history messages are marked as read.
-  private firstUnreadMessageId: string | null = null;
+  firstUnreadMessageId: string | null = null;
 
 
   // ==================================================
@@ -1184,9 +1185,10 @@ export class AppComponent implements OnDestroy {
     history: ChatMessageData[]
   ) {
 
-    // Detect unread messages before emitting read receipts.
-    // The database's read_at value tells us whether the peer
-    // had already read the message before this chat was opened.
+    // Detect the first unread received message BEFORE sending
+    // read receipts. This lets the divider render at the
+    // correct position even though opening the chat marks
+    // those messages as read immediately afterward.
     this.firstUnreadMessageId = null;
 
     for (const message of history) {
@@ -1251,7 +1253,11 @@ export class AppComponent implements OnDestroy {
                       ? 'delivered'
                       : 'sent'
                 )
-                : 'read'
+                : (
+                  message.readAt
+                    ? 'read'
+                    : 'delivered'
+                )
 
           };
 
@@ -1284,7 +1290,9 @@ export class AppComponent implements OnDestroy {
 
     this.scrollSoon();
 
-    // Mark received history as read.
+    // The chat is now open, so received history messages are
+    // marked as delivered/read. The unread divider remains
+    // visible for this session using firstUnreadMessageId.
     for (
       const message of chatMessages
     ) {
@@ -1598,17 +1606,11 @@ export class AppComponent implements OnDestroy {
         }
 
 
-        const elements =
-          document.querySelectorAll(
-            '.row'
-          );
-
-
         const element =
-          elements[
-          index
-          ] as HTMLElement |
-          undefined;
+          document.querySelector(
+            `.row[data-message-id="${CSS.escape(id)}"]`
+          ) as HTMLElement |
+          null;
 
 
         element?.scrollIntoView({
